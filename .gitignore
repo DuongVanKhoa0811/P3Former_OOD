@@ -1,4 +1,6 @@
 data/
 papers/
+work_dirs/
+checkpoint/
 CLAUDE.md
 **/__pycache__/
