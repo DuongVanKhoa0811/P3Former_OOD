@@ -295,7 +295,7 @@ class EvalPanoptic:
 
         if self.dataset_type == 'nuscenes':
             gt_instances = gt_instances % self.id_offset + gt_semantics * self.id_offset
-        elif self.dataset_type == 'semantickitti':
+        elif self.dataset_type in ('semantickitti', 'dso'):
             gt_instances = gt_instances // self.id_offset * self.id_offset + gt_semantics
         gt_instances = gt_instances + 1
 
