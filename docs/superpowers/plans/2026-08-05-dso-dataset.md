@@ -1388,9 +1388,11 @@ inst = sample.gt_pts_seg.pts_instance_mask.numpy()
 assert pts.shape[1] == 4, pts.shape
 assert pts.shape[0] == sem.shape[0] == inst.shape[0]
 assert sem.min() >= 0 and sem.max() <= 16, (sem.min(), sem.max())
-# after mapping: sem is train ids; things are 0-6, so any point whose train id
-# is >= 7 (stuff or ignore) must have zeroed instance bits
-assert (inst[sem >= 7] >> 16 == 0).all()
+# stuff/ignore (train id >= 7): instance bits are 0 from the loader, or
+# exactly 1000 for points contributed by LaserMix/PolarMix's mixed-in scan
+# (the +1000<<16 collision-avoidance offset in transforms_3d).
+hi = np.unique(inst[sem >= 7] >> 16)
+assert set(hi.tolist()) <= {0, 1000}, hi
 print('train sample ok:', pts.shape[0], 'points,',
       len(np.unique(inst[(sem <= 6) & (inst >> 16 != 0)])), 'thing instances')
 
@@ -1401,6 +1403,10 @@ vsample = vitem['data_samples']
 eval_ann = vsample.eval_ann_info
 assert eval_ann['pts_semantic_mask'].max() <= 16
 assert eval_ann['pts_instance_mask'].dtype == np.int64
+# no mixes at test time: the loader invariant must hold exactly
+vsem = eval_ann['pts_semantic_mask']
+vinst = eval_ann['pts_instance_mask']
+assert (vinst[vsem >= 7] >> 16 == 0).all()
 print('val sample ok:', vitem['inputs']['points'].shape[0], 'points')
 print('CONFIG CHECK PASSED')
 EOF
