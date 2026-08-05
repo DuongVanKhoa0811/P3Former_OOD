@@ -111,3 +111,55 @@ def dso_points_and_masks(
     inst[~np.isin(sem, DSO_THING_RAW_IDS)] = 0
     packed = (inst << 16) | sem
     return points, sem, packed
+
+
+@TRANSFORMS.register_module()
+class _LoadDSOPointsAndAnnotations(BaseTransform):
+    """Load points and panoptic labels from one DSO annotation PLY.
+
+    Replaces the ``LoadPointsFromFile`` + ``_LoadAnnotations3D`` pair: the PLY
+    at ``results['lidar_path']`` already holds both. Emits:
+
+    - ``points``: 4-dim LiDARPoints (x, y, z, intensity).
+    - ``pts_semantic_mask`` (when ``with_ann``): raw uint8 semantic ids as
+      int64, mapped to train ids later by ``PointSegClassMapping``.
+    - ``pts_instance_mask`` (when ``with_ann``): ``(instance << 16) | raw
+      semantic`` as int64, instance bits zeroed for non-thing classes.
+
+    Both masks are mirrored into ``eval_ann_info`` when present (test mode),
+    matching the behaviour of ``_LoadAnnotations3D``.
+
+    Args:
+        with_ann (bool): Whether to produce the two masks. Defaults to True.
+        norm_intensity (bool): Divide intensity by 255 into (0, 1].
+            Defaults to True.
+        coord_type (str): Point coordinate frame. Defaults to 'LIDAR'.
+    """
+
+    def __init__(self,
+                 with_ann: bool = True,
+                 norm_intensity: bool = True,
+                 coord_type: str = 'LIDAR') -> None:
+        self.with_ann = with_ann
+        self.norm_intensity = norm_intensity
+        self.coord_type = coord_type
+
+    def transform(self, results: dict) -> dict:
+        data = read_dso_ply(results['lidar_path'])
+        points, sem, packed = dso_points_and_masks(
+            data, norm_intensity=self.norm_intensity)
+        points_class = get_points_type(self.coord_type)
+        results['points'] = points_class(
+            points, points_dim=points.shape[-1], attribute_dims=None)
+        if self.with_ann:
+            results['pts_semantic_mask'] = sem
+            results['pts_instance_mask'] = packed
+            if 'eval_ann_info' in results:
+                results['eval_ann_info']['pts_semantic_mask'] = sem
+                results['eval_ann_info']['pts_instance_mask'] = packed
+        return results
+
+    def __repr__(self) -> str:
+        return (f'{self.__class__.__name__}(with_ann={self.with_ann}, '
+                f'norm_intensity={self.norm_intensity}, '
+                f'coord_type={self.coord_type})')

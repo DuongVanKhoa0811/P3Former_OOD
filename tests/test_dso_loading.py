@@ -109,9 +109,90 @@ def test_no_norm_intensity():
     print('PASS test_no_norm_intensity')
 
 
+def test_transform_synthetic():
+    from datasets.transforms.dso_loading import _LoadDSOPointsAndAnnotations
+    from mmdet3d.structures.points import LiDARPoints
+    arr = make_frame()
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, 'frame.ply')
+        write_ply(path, arr)
+        loader = _LoadDSOPointsAndAnnotations()
+        results = loader.transform({'lidar_path': path})
+    assert isinstance(results['points'], LiDARPoints)
+    assert tuple(results['points'].tensor.shape) == (6, 4)
+    np.testing.assert_array_equal(results['pts_semantic_mask'],
+                                  [3, 3, 1, 8, 19, 200])
+    np.testing.assert_array_equal(
+        results['pts_instance_mask'],
+        [(7 << 16) | 3, (7 << 16) | 3, (12 << 16) | 1, 8, 19, 200])
+    print('PASS test_transform_synthetic')
+
+
+def test_transform_eval_ann_and_no_ann():
+    from datasets.transforms.dso_loading import _LoadDSOPointsAndAnnotations
+    arr = make_frame()
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, 'frame.ply')
+        write_ply(path, arr)
+        # test mode: dataset created an empty eval_ann_info dict
+        results = _LoadDSOPointsAndAnnotations().transform(
+            {'lidar_path': path, 'eval_ann_info': {}})
+        assert 'pts_semantic_mask' in results['eval_ann_info']
+        assert 'pts_instance_mask' in results['eval_ann_info']
+        np.testing.assert_array_equal(
+            results['eval_ann_info']['pts_semantic_mask'],
+            results['pts_semantic_mask'])
+        # with_ann=False: points only
+        results = _LoadDSOPointsAndAnnotations(with_ann=False).transform(
+            {'lidar_path': path})
+        assert 'points' in results
+        assert 'pts_semantic_mask' not in results
+        assert 'pts_instance_mask' not in results
+    print('PASS test_transform_eval_ann_and_no_ann')
+
+
+REAL_SEQ = ('/mnt/ssd/khoadv/projects/OOD_PanSeg_3D/data/DSO_Dataset/'
+            'Annotation_Final/(2024-04-29) One-North Route 1 Day')
+
+
+def test_transform_real_frame():
+    if not os.path.isdir(REAL_SEQ):
+        print('SKIP test_transform_real_frame (data not mounted)')
+        return
+    from datasets.transforms.dso_loading import _LoadDSOPointsAndAnnotations
+    path = sorted(os.path.join(REAL_SEQ, f) for f in os.listdir(REAL_SEQ)
+                  if f.endswith('.ply'))[0]
+    results = _LoadDSOPointsAndAnnotations().transform({'lidar_path': path})
+    pts = results['points'].tensor.numpy()
+    sem = results['pts_semantic_mask']
+    packed = results['pts_instance_mask']
+    assert pts.shape[0] > 100_000 and pts.shape[1] == 4
+    assert 0.0 < pts[:, 3].max() <= 1.0
+    # semantic histogram must match an independent re-read of the raw file
+    raw = read_dso_ply(path)
+    np.testing.assert_array_equal(np.bincount(sem, minlength=256),
+                                  np.bincount(raw['semantic'], minlength=256))
+    # packing invariants
+    np.testing.assert_array_equal(packed & 0xFFFF, sem)
+    thing = np.isin(sem, DSO_THING_RAW_IDS)
+    assert (packed[~thing] >> 16 == 0).all()
+    # thing instances survive: count unique (instance, class) pairs two ways
+    n_inst_loader = len(np.unique(packed[thing & (packed >> 16 != 0)]))
+    raw_inst = raw['instance'].astype(np.int64)
+    raw_thing = np.isin(raw['semantic'], DSO_THING_RAW_IDS) & (raw_inst != 0)
+    n_inst_raw = len(np.unique((raw_inst[raw_thing] << 16)
+                               | raw['semantic'][raw_thing].astype(np.int64)))
+    assert n_inst_loader == n_inst_raw
+    print(f'PASS test_transform_real_frame ({pts.shape[0]:,} pts, '
+          f'{n_inst_raw} thing instances)')
+
+
 if __name__ == '__main__':
     test_read_roundtrip()
     test_size_mismatch_raises()
     test_points_and_masks()
     test_no_norm_intensity()
+    test_transform_synthetic()
+    test_transform_eval_ann_and_no_ann()
+    test_transform_real_frame()
     print('ALL TESTS PASSED')
