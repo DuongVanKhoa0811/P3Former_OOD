@@ -786,17 +786,43 @@ def test_split_membership_and_structure():
     print('PASS test_split_membership_and_structure')
 
 
-def test_sequence_mismatch_raises():
+def test_missing_sequence_raises():
     with tempfile.TemporaryDirectory() as tmp:
         _fake_annotations(tmp, frames_per_seq=1)
-        os.makedirs(os.path.join(tmp, 'annotations', 'surprise-sequence'))
+        removed = dso_converter.VAL_SEQUENCES[0]
+        os.remove(os.path.join(tmp, 'annotations', removed, '00000000.ply'))
+        os.rmdir(os.path.join(tmp, 'annotations', removed))
         try:
             dso_converter.create_dso_info_file('dso', tmp)
         except RuntimeError as exc:
-            assert 'surprise-sequence' in str(exc)
-            print('PASS test_sequence_mismatch_raises')
+            assert removed in str(exc)
+            print('PASS test_missing_sequence_raises')
             return
-    raise AssertionError('unexpected sequence dir did not raise')
+    raise AssertionError('missing split sequence did not raise')
+
+
+def test_extra_sequence_ignored():
+    """Extra dirs (e.g. newly added recordings) are ignored with a notice;
+    the fixed 12-sequence split is authoritative."""
+    with tempfile.TemporaryDirectory() as tmp:
+        _fake_annotations(tmp, frames_per_seq=3)
+        extra = os.path.join(tmp, 'annotations', '(2026-01-28) Cetran Run AM')
+        os.makedirs(extra)
+        write_ply(os.path.join(extra, '00000000.ply'), make_frame())
+        real_totals = dso_converter.EXPECTED_TOTALS
+        real_mini = dso_converter.MINI_NUM_FRAMES
+        dso_converter.EXPECTED_TOTALS = {'train': 24, 'val': 3, 'test': 9}
+        dso_converter.MINI_NUM_FRAMES = 2
+        try:
+            dso_converter.create_dso_info_file('dso', tmp)
+        finally:
+            dso_converter.EXPECTED_TOTALS = real_totals
+            dso_converter.MINI_NUM_FRAMES = real_mini
+        train = mmengine.load(os.path.join(tmp, 'dso_infos_train.pkl'))
+    seqs = {e['sample_id'].split('/')[0] for e in train['data_list']}
+    assert '(2026-01-28) Cetran Run AM' not in seqs
+    assert len(train['data_list']) == 24
+    print('PASS test_extra_sequence_ignored')
 
 
 def test_wrong_frame_count_raises():
@@ -813,7 +839,8 @@ def test_wrong_frame_count_raises():
 
 if __name__ == '__main__':
     test_split_membership_and_structure()
-    test_sequence_mismatch_raises()
+    test_missing_sequence_raises()
+    test_extra_sequence_ignored()
     test_wrong_frame_count_raises()
     print('ALL TESTS PASSED')
 ```
@@ -897,13 +924,18 @@ def create_dso_info_file(pkl_prefix, save_path):
     if not ann_dir.is_dir():
         raise FileNotFoundError(
             f'{ann_dir} missing; symlink it to the DSO Annotation_Final dir')
-    found = sorted(p.name for p in ann_dir.iterdir() if p.is_dir())
-    expected = sorted(TRAIN_SEQUENCES + VAL_SEQUENCES + TEST_SEQUENCES)
-    if found != expected:
+    found = {p.name for p in ann_dir.iterdir() if p.is_dir()}
+    expected = set(TRAIN_SEQUENCES + VAL_SEQUENCES + TEST_SEQUENCES)
+    missing = sorted(expected - found)
+    if missing:
         raise RuntimeError(
-            f'sequence set mismatch under {ann_dir}:\n'
-            f'  missing: {sorted(set(expected) - set(found))}\n'
-            f'  unexpected: {sorted(set(found) - set(expected))}')
+            f'missing split sequences under {ann_dir}: {missing}')
+    extra = sorted(found - expected)
+    if extra:
+        # The 12-sequence split is fixed; new recordings dropped into the
+        # annotation dir are not silently absorbed into any split.
+        print(f'ignoring {len(extra)} sequence dir(s) outside the fixed '
+              f'split: {extra}')
 
     splits = {
         'train': TRAIN_SEQUENCES,
@@ -959,7 +991,7 @@ Add a branch to the `__main__` dispatch, before the final `else` (line 117-121):
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `conda run -n p3former python tests/test_dso_converter.py`
-Expected: 3 PASS lines then `ALL TESTS PASSED`
+Expected: 4 PASS lines then `ALL TESTS PASSED`
 
 - [ ] **Step 5: Create the data symlink and generate the real pkls**
 
@@ -969,7 +1001,7 @@ ln -sfn "/mnt/ssd/khoadv/projects/OOD_PanSeg_3D/data/DSO_Dataset/Annotation_Fina
 conda run -n p3former python tools/create_data.py dso --root-path data/dso --out-dir data/dso --extra-tag dso
 ```
 
-Expected output: four `DSO info <split> (<N> frames) is saved to …` lines with N = 8474, 401, 2625, 32. (`--root-path` is accepted but unused; `--out-dir` drives everything, matching the semantickitti branch's style.)
+Expected output: four `DSO info <split> (<N> frames) is saved to …` lines with N = 8474, 401, 2625, 32 (plus an `ignoring …` notice for any sequence dirs outside the fixed split, e.g. the 2026 Cetran runs). (`--root-path` is accepted but unused; `--out-dir` drives everything, matching the semantickitti branch's style.)
 
 - [ ] **Step 6: Verify the real pkls against the filesystem**
 

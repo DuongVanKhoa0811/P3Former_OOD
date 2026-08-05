@@ -96,8 +96,10 @@ SemanticKITTI info structure:
 `{'metainfo': {'DATASET': 'DSO'}, 'data_list': [{'lidar_points': {'lidar_path':
 'annotations/<seq>/<frame>.ply', 'num_pts_feats': 4}, 'pts_panoptic_mask_path':
 'annotations/<seq>/<frame>.ply', 'sample_id': '<seq>/<frame-stem>'}, ...]}`.
-It asserts the discovered sequence set is exactly the 12 known names and the split totals are
-8,474 / 401 / 2,625. `tools/create_data.py` gets a `dso` branch:
+It hard-fails if any of the 12 split sequences is missing, ignores sequence dirs outside the
+fixed split with a printed notice (new recordings — e.g. the 2026 Cetran runs — are never
+silently absorbed into a split), and asserts the split totals are 8,474 / 401 / 2,625.
+`tools/create_data.py` gets a `dso` branch:
 `python tools/create_data.py dso --root-path data/dso --out-dir data/dso --extra-tag dso`.
 
 ### 6.2 Loading transform — `datasets/transforms/dso_loading.py`
@@ -183,7 +185,8 @@ things only) → panoptic point predictions → `_PanopticSegMetric` (PQ/RQ/SQ/m
 
 - PLY reader validates magic, endianness, required fields, and header-vs-filesize
   consistency; a corrupt file raises with the file path in the message (no silent skip).
-- Info generator hard-fails on unknown/missing sequence names or wrong frame totals.
+- Info generator hard-fails on missing split sequences or wrong frame totals; sequence
+  dirs outside the fixed split are ignored with a printed notice.
 - Unmapped raw semantic ids can never leak into training: the 256-entry lookup defaults to
   ignore (16).
 

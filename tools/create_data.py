@@ -2,6 +2,7 @@
 import argparse
 from os import path as osp
 
+from dataset_converters import dso_converter
 from dataset_converters import nuscenes_converter as nuscenes_converter
 from dataset_converters import semantickitti_converter
 from dataset_converters.update_infos_to_v2 import update_pkl_infos
@@ -48,6 +49,16 @@ def semantickitti_data_prep(info_prefix, out_dir):
     """
     semantickitti_converter.create_semantickitti_info_file(
         info_prefix, out_dir)
+
+
+def dso_data_prep(info_prefix, out_dir):
+    """Prepare the info files for the DSO dataset.
+
+    Args:
+        info_prefix (str): The prefix of info filenames.
+        out_dir (str): Output directory of the generated info files.
+    """
+    dso_converter.create_dso_info_file(info_prefix, out_dir)
 
 
 parser = argparse.ArgumentParser(description='Data converter arg parser')
@@ -117,5 +128,7 @@ if __name__ == '__main__':
     elif args.dataset == 'semantickitti':
         semantickitti_data_prep(
             info_prefix=args.extra_tag, out_dir=args.out_dir)
+    elif args.dataset == 'dso':
+        dso_data_prep(info_prefix=args.extra_tag, out_dir=args.out_dir)
     else:
         raise NotImplementedError(f'Don\'t support {args.dataset} dataset.')
