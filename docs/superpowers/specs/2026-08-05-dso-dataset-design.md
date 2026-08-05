@@ -28,16 +28,21 @@ use of the raw `LiDAR_INS` point clouds, camera data, submission writers for DSO
   Stuff classes carry one dummy instance id per frame — except traffic-sign (19) with
   ~17.6 real instance ids/frame, and traffic-cone (20) with ~4.2.
 
-## 3. Splits (fixed by user)
+## 3. Splits (fixed by user; revised 2026-08-05)
+
+Names below are the annotation-directory names. The user specified the split in raw
+`LiDAR_INS` naming (hyphenated Data_Set1 names, "Pulau Ubin RouteN"); they map 1:1 onto
+the annotation names used everywhere in this repo (hyphens → spaces,
+"Pulau Ubin Route1/3" → "Ubin Route 1/3"). Do not "fix" the names back.
 
 | Split | Sequences | Frames |
 |---|---|---|
-| train | the 10 sequences that are not val/test | 10,361 |
-| val   | `(2025-03-02) Ubin Route 3` | 458 |
-| test  | `(2025-03-02) Ubin Route 1` | 681 |
+| train | (2024-04-29) One-North Route 1 Day, (2024-04-29) One-North Route 1 Night, (2024-05-13) One-North Route 2 Rain, (2024-05-13) Science Park Rain, (2024-05-17) Science Park Day, (2024-06-10) Chinatown Route 2 Day, (2024-06-10) Chinatown Route 2 Night, (2025-02-27) Tiong Bahru Rerun AM | 8,474 |
+| val   | (2024-06-10) Chinatown Route 1 Day | 401 |
+| test  | (2024-04-29) One-North Route 2 Day, (2025-03-02) Ubin Route 1, (2025-03-02) Ubin Route 3 | 2,625 |
 
 Also generated: `dso_infos_mini.pkl` = first 32 frames of
-`(2024-04-29) One-North Route 1 Day`, for smoke tests only.
+`(2024-04-29) One-North Route 1 Day` (a train sequence), for smoke tests only.
 
 ## 4. Class mapping — 16 train classes, `ignore_index = 16`
 
@@ -84,15 +89,15 @@ Mapped to ignore (16): 0 miss-label, 9 unpaved-road, 12 window, 13 net-fence,
 
 ### 6.1 Info generator — `tools/dataset_converters/dso_converter.py` + `create_data.py` wiring
 
-`create_dso_info_file(pkl_prefix, save_path, data_root)` scans
-`<data_root>/annotations/*/` for `*.ply` (sorted), assigns splits by the hardcoded
+`create_dso_info_file(pkl_prefix, save_path)` scans
+`<save_path>/annotations/*/` for `*.ply` (sorted), assigns splits by the hardcoded
 sequence-name lists from §3, and writes `dso_infos_{train,val,test,mini}.pkl` in the
 SemanticKITTI info structure:
 `{'metainfo': {'DATASET': 'DSO'}, 'data_list': [{'lidar_points': {'lidar_path':
 'annotations/<seq>/<frame>.ply', 'num_pts_feats': 4}, 'pts_panoptic_mask_path':
 'annotations/<seq>/<frame>.ply', 'sample_id': '<seq>/<frame-stem>'}, ...]}`.
 It asserts the discovered sequence set is exactly the 12 known names and the split totals are
-10,361 / 458 / 681. `tools/create_data.py` gets a `dso` branch:
+8,474 / 401 / 2,625. `tools/create_data.py` gets a `dso` branch:
 `python tools/create_data.py dso --root-path data/dso --out-dir data/dso --extra-tag dso`.
 
 ### 6.2 Loading transform — `datasets/transforms/dso_loading.py`
@@ -184,7 +189,7 @@ things only) → panoptic point predictions → `_PanopticSegMetric` (PQ/RQ/SQ/m
 
 ## 9. Verification
 
-1. `create_data.py dso` → pkl counts exactly 10,361 / 458 / 681 / 32.
+1. `create_data.py dso` → pkl counts exactly 8,474 / 401 / 2,625 / 32.
 2. Pipeline unit check (script, no GPU): run train pipeline on one frame; assert points
    shape N×4, intensity ∈ (0, 1]; assert mapped semantic histogram equals an independent
    numpy re-read of the same PLY; assert stuff points have `instance_mask >> 16 == 0` and
@@ -194,7 +199,8 @@ things only) → panoptic point predictions → `_PanopticSegMetric` (PQ/RQ/SQ/m
   val_dataloader.dataset.dataset.ann_file=dso_infos_mini.pkl train_cfg.max_epochs=1` —
   must complete an epoch + val without OOM and print the 16-class metric table.
 4. Full run on GPU 1; monitor first epochs for loss divergence (P3Former instability risk).
-5. Final: `test.py` with best checkpoint on `dso_infos_test.pkl` (Ubin Route 1).
+5. Final: `test.py` with best checkpoint on `dso_infos_test.pkl`
+   (One-North Route 2 Day + Ubin Route 1 + Ubin Route 3, 2,625 frames).
 
 ## 10. Risks & fallbacks
 
@@ -205,4 +211,6 @@ things only) → panoptic point predictions → `_PanopticSegMetric` (PQ/RQ/SQ/m
 - **LaserMix band semantics with 2 merged LiDARs**: pitch bands are still geometrically
   well-defined w.r.t. the common origin; if augmentation hurts, drop LaserMix branch to
   PolarMix-only via the RandomChoice probabilities.
-- **Val on a single 458-frame sequence**: PQ will be noisy; acceptable — split fixed by user.
+- **Val on a single 401-frame sequence** (Chinatown Route 1 Day): PQ will be noisy;
+  acceptable — split fixed by user. The test split (2,625 frames) includes the two rural
+  Pulau Ubin routes, a deliberate domain shift from the urban train/val scenes.

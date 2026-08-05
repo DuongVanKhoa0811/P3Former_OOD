@@ -756,7 +756,7 @@ def test_split_membership_and_structure():
         _fake_annotations(tmp, frames_per_seq=3)
         real_totals = dso_converter.EXPECTED_TOTALS
         real_mini = dso_converter.MINI_NUM_FRAMES
-        dso_converter.EXPECTED_TOTALS = {'train': 30, 'val': 3, 'test': 3}
+        dso_converter.EXPECTED_TOTALS = {'train': 24, 'val': 3, 'test': 9}
         dso_converter.MINI_NUM_FRAMES = 2
         try:
             dso_converter.create_dso_info_file('dso', tmp)
@@ -768,13 +768,15 @@ def test_split_membership_and_structure():
         test = mmengine.load(os.path.join(tmp, 'dso_infos_test.pkl'))
         mini = mmengine.load(os.path.join(tmp, 'dso_infos_mini.pkl'))
     assert train['metainfo'] == {'DATASET': 'DSO'}
-    assert len(train['data_list']) == 30
-    assert len(val['data_list']) == 3 and len(test['data_list']) == 3
+    assert len(train['data_list']) == 24
+    assert len(val['data_list']) == 3 and len(test['data_list']) == 9
     assert len(mini['data_list']) == 2
     val_seqs = {e['sample_id'].split('/')[0] for e in val['data_list']}
-    assert val_seqs == {'(2025-03-02) Ubin Route 3'}
+    assert val_seqs == {'(2024-06-10) Chinatown Route 1 Day'}
     test_seqs = {e['sample_id'].split('/')[0] for e in test['data_list']}
-    assert test_seqs == {'(2025-03-02) Ubin Route 1'}
+    assert test_seqs == {'(2024-04-29) One-North Route 2 Day',
+                         '(2025-03-02) Ubin Route 1',
+                         '(2025-03-02) Ubin Route 3'}
     entry = train['data_list'][0]
     assert entry['lidar_points']['num_pts_feats'] == 4
     assert entry['lidar_points']['lidar_path'].startswith('annotations/')
@@ -799,7 +801,7 @@ def test_sequence_mismatch_raises():
 
 def test_wrong_frame_count_raises():
     with tempfile.TemporaryDirectory() as tmp:
-        _fake_annotations(tmp, frames_per_seq=1)  # real totals expect 10361
+        _fake_annotations(tmp, frames_per_seq=1)  # real totals expect 8474
         try:
             dso_converter.create_dso_info_file('dso', tmp)
         except RuntimeError as exc:
@@ -839,21 +841,25 @@ from pathlib import Path
 
 import mmengine
 
-VAL_SEQUENCES = ['(2025-03-02) Ubin Route 3']
-TEST_SEQUENCES = ['(2025-03-02) Ubin Route 1']
+# Annotation-directory sequence names. The user's split was specified in raw
+# LiDAR_INS naming (hyphenated, "Pulau Ubin RouteN"); it maps 1:1 onto these.
+VAL_SEQUENCES = ['(2024-06-10) Chinatown Route 1 Day']
+TEST_SEQUENCES = [
+    '(2024-04-29) One-North Route 2 Day',
+    '(2025-03-02) Ubin Route 1',
+    '(2025-03-02) Ubin Route 3',
+]
 TRAIN_SEQUENCES = [
     '(2024-04-29) One-North Route 1 Day',
     '(2024-04-29) One-North Route 1 Night',
-    '(2024-04-29) One-North Route 2 Day',
     '(2024-05-13) One-North Route 2 Rain',
     '(2024-05-13) Science Park Rain',
     '(2024-05-17) Science Park Day',
-    '(2024-06-10) Chinatown Route 1 Day',
     '(2024-06-10) Chinatown Route 2 Day',
     '(2024-06-10) Chinatown Route 2 Night',
     '(2025-02-27) Tiong Bahru Rerun AM',
 ]
-EXPECTED_TOTALS = {'train': 10361, 'val': 458, 'test': 681}
+EXPECTED_TOTALS = {'train': 8474, 'val': 401, 'test': 2625}
 MINI_SEQUENCE = '(2024-04-29) One-North Route 1 Day'
 MINI_NUM_FRAMES = 32
 
@@ -963,14 +969,14 @@ ln -sfn "/mnt/ssd/khoadv/projects/OOD_PanSeg_3D/data/DSO_Dataset/Annotation_Fina
 conda run -n p3former python tools/create_data.py dso --root-path data/dso --out-dir data/dso --extra-tag dso
 ```
 
-Expected output: four `DSO info <split> (<N> frames) is saved to …` lines with N = 10361, 458, 681, 32. (`--root-path` is accepted but unused; `--out-dir` drives everything, matching the semantickitti branch's style.)
+Expected output: four `DSO info <split> (<N> frames) is saved to …` lines with N = 8474, 401, 2625, 32. (`--root-path` is accepted but unused; `--out-dir` drives everything, matching the semantickitti branch's style.)
 
 - [ ] **Step 6: Verify the real pkls against the filesystem**
 
 ```bash
 conda run -n p3former python - <<'EOF'
 import mmengine, os
-for split, expected in [('train', 10361), ('val', 458), ('test', 681), ('mini', 32)]:
+for split, expected in [('train', 8474), ('val', 401), ('test', 2625), ('mini', 32)]:
     infos = mmengine.load(f'data/dso/dso_infos_{split}.pkl')
     n = len(infos['data_list'])
     assert n == expected, (split, n, expected)
@@ -1341,7 +1347,7 @@ from mmdet3d.registry import DATASETS
 cfg = Config.fromfile('configs/_base_/datasets/dso_panoptic_lpmix.py')
 
 train_ds = DATASETS.build(cfg.train_dataloader['dataset']['dataset'])
-assert len(train_ds) == 10361, len(train_ds)
+assert len(train_ds) == 8474, len(train_ds)
 item = train_ds[0]  # full train pipeline incl. RandomChoice lp-mix
 sample = item['data_samples']
 pts = item['inputs']['points']
@@ -1357,7 +1363,7 @@ print('train sample ok:', pts.shape[0], 'points,',
       len(np.unique(inst[(sem <= 6) & (inst >> 16 != 0)])), 'thing instances')
 
 val_ds = DATASETS.build(cfg.val_dataloader['dataset']['dataset'])
-assert len(val_ds) == 458, len(val_ds)
+assert len(val_ds) == 401, len(val_ds)
 vitem = val_ds[0]
 vsample = vitem['data_samples']
 eval_ann = vsample.eval_ann_info
@@ -1595,7 +1601,7 @@ tail -n 30 work_dirs/dso_train_launch.log
 grep -m 5 "Epoch(train)" work_dirs/p3former_1xb2_3x_dso/*/*.log 2>/dev/null | tail -n 5
 ```
 
-Expected: iterations progressing, losses finite and broadly decreasing over the first ~200 iters (loss_cls + loss_mask + loss_dice + sem losses; initial total typically double-digit, trending down). No `nan`, no OOM traceback. At batch 2, one epoch is 5,181 iters; expect roughly 1.5–2.5 h/epoch → 2.5–4 days for 36 epochs.
+Expected: iterations progressing, losses finite and broadly decreasing over the first ~200 iters (loss_cls + loss_mask + loss_dice + sem losses; initial total typically double-digit, trending down). No `nan`, no OOM traceback. At batch 2, one epoch is 4,237 iters; expect roughly 1.2–2 h/epoch → 2–3 days for 36 epochs.
 
 - [ ] **Step 3: Monitor per-epoch val**
 
@@ -1607,7 +1613,7 @@ Confirm `work_dirs/p3former_1xb2_3x_dso/epoch_36.pth` exists and note the best-v
 
 ---
 
-### Task 10: Test-set evaluation (Ubin Route 1)
+### Task 10: Test-set evaluation (3 held-out sequences)
 
 **Files:**
 - No source changes. Output: final metric table.
@@ -1616,7 +1622,7 @@ Confirm `work_dirs/p3former_1xb2_3x_dso/epoch_36.pth` exists and note the best-v
 - Consumes: best checkpoint from Task 9 (default `epoch_36.pth`; substitute the best-val-PQ epoch if different).
 - Produces: the reported DSO test PQ/RQ/SQ/mIoU baseline numbers.
 
-- [ ] **Step 1: Evaluate on the held-out test sequence**
+- [ ] **Step 1: Evaluate on the held-out test sequences**
 
 ```bash
 CUDA_VISIBLE_DEVICES=1 conda run -n p3former python test.py \
@@ -1625,7 +1631,7 @@ CUDA_VISIBLE_DEVICES=1 conda run -n p3former python test.py \
   --cfg-options test_dataloader.dataset.dataset.ann_file=dso_infos_test.pkl
 ```
 
-Expected: 681 frames evaluated; final table with per-class IoU/PQ/RQ/SQ and the summary metrics (`pq`, `pq_dagger`, `miou`, `pq_things`, `pq_stuff`, …). DSO test infos contain labels, so this is a real metric run (no submission writing).
+Expected: 2,625 frames evaluated (One-North Route 2 Day + the two rural Ubin routes — note the test split carries a deliberate urban→rural domain shift); final table with per-class IoU/PQ/RQ/SQ and the summary metrics (`pq`, `pq_dagger`, `miou`, `pq_things`, `pq_stuff`, …). DSO test infos contain labels, so this is a real metric run (no submission writing).
 
 - [ ] **Step 2: Record results**
 
