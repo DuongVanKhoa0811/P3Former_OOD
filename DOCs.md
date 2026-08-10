@@ -67,3 +67,37 @@ Results (4071 val scans, ~6.5 min on one RTX 6000 Ada, ~1.2 GB GPU memory):
 
 
 Matches the reference PQ 62.6 for this checkpoint.
+
+
+
+## 2026-08-06 — Training commands
+
+DSO (this machine, single GPU — ~0.9 s/iter, ~18.8 GB at batch 2, ≈40 h for 36 epochs):
+
+```bash
+CUDA_VISIBLE_DEVICES=1 python train.py configs/p3former/p3former_1xb2_3x_dso.py
+```
+
+DSO (4x A5000 24 GB server, batch 1 per GPU, effective batch 4):
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 bash dist_train.sh configs/p3former/p3former_4xb1_3x_dso.py 4
+```
+
+SemanticKITTI (single GPU, batch 2):
+
+```bash
+CUDA_VISIBLE_DEVICES=1 python train.py configs/p3former/p3former_1xb2_3x_semantickitti.py
+```
+
+SemanticKITTI (4x A5000, batch 1 per GPU):
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 bash dist_train.sh configs/p3former/p3former_4xb1_3x_semantickitti.py 4
+```
+
+Notes:
+
+- Append `--resume` to continue an interrupted run from the latest checkpoint.
+- `PORT=29511 ...` in front of dist_train.sh if the default port is busy.
+- Outputs land in `work_dirs/<config-name>/`; checkpoints every 5 epochs, val PQ table every epoch.
