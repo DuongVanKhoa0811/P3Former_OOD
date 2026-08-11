@@ -101,3 +101,45 @@ Notes:
 - Append `--resume` to continue an interrupted run from the latest checkpoint.
 - `PORT=29511 ...` in front of dist_train.sh if the default port is busy.
 - Outputs land in `work_dirs/<config-name>/`; checkpoints every 5 epochs, val PQ table every epoch.
+- Run status: DSO 1xb2 ✅ done · SemanticKITTI 4xb1 ✅ done · SemanticKITTI 1xb2 🔄 running ·
+  DSO 4xb1 ❌ out-of-memory on 24 GB A5000s (DSO frames are ~416k pts; no checkpoint produced).
+
+
+
+## 2026-08-11 — Testing commands
+
+`epoch_36.pth` is the final checkpoint; check the training log's per-epoch val PQ and substitute
+the best epoch's checkpoint (saved at 5, 10, ..., 35, 36) if it isn't the last one.
+
+DSO 1xb2 — val split (Chinatown Route 1 Day, 401 frames; this is what test.py evaluates by default):
+
+```bash
+CUDA_VISIBLE_DEVICES=1 python test.py configs/p3former/p3former_1xb2_3x_dso.py work_dirs/p3former_1xb2_3x_dso/epoch_36.pth
+```
+
+DSO 1xb2 — held-out test split (One-North Route 2 Day + Ubin Route 1 + Ubin Route 3, 2625 frames;
+the two rural Ubin routes are a deliberate urban→rural domain shift):
+
+```bash
+CUDA_VISIBLE_DEVICES=1 python test.py configs/p3former/p3former_1xb2_3x_dso.py work_dirs/p3former_1xb2_3x_dso/epoch_36.pth --cfg-options test_dataloader.dataset.dataset.ann_file=dso_infos_test.pkl
+```
+
+SemanticKITTI 1xb2 — val split (4071 scans; run after training finishes):
+
+```bash
+CUDA_VISIBLE_DEVICES=1 python test.py configs/p3former/p3former_1xb2_3x_semantickitti.py work_dirs/p3former_1xb2_3x_semantickitti/epoch_36.pth
+```
+
+SemanticKITTI 4xb1 — val split, on the A5000 server (4-GPU eval; single-GPU
+`CUDA_VISIBLE_DEVICES=0 python test.py ...` works too, eval needs only ~1-2 GB):
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 bash dist_test.sh configs/p3former/p3former_4xb1_3x_semantickitti.py work_dirs/p3former_4xb1_3x_semantickitti/epoch_36.pth 4
+```
+
+Notes:
+
+- SemanticKITTI "testing" means the val split — the official test split is unlabeled
+  (submission-only, via the `_submit` config).
+- The two DSO evals contend with whatever is training on GPU 1; run them after the
+  SemanticKITTI 1xb2 run finishes (or on GPU 0 when it is free — eval is light).
