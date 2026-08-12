@@ -12,6 +12,8 @@ from mmengine.structures import InstanceData
 
 from mmcv.ops import SubMConv3d
 
+from p3former.utils.ood_scores import point_ood_scores
+
 @MODELS.register_module()
 class _Masked_Focal_Attention(nn.Module):
     def __init__(self,
@@ -213,7 +215,8 @@ class _P3FormerHead(nn.Module):
                  iou_thr=0.8,
                  mask_score_thr=0.5,
                  grid_size=[480, 360, 32],
-                 point_cloud_range=[]):
+                 point_cloud_range=[],
+                 ood_cfg=None):
         super().__init__()
 
         self.queries = SubMConv3d(embed_dims, num_queries, indice_key="logit", 
@@ -230,6 +233,12 @@ class _P3FormerHead(nn.Module):
         self.num_stuff_classes = len(stuff_class)
         self.num_decoder_layers = num_decoder_layers
         self.num_queries = num_queries
+
+        self.ood_cfg = ood_cfg
+        if self.ood_cfg is not None:
+            assert use_sem_loss, (
+                'decode_head.ood_cfg requires use_sem_loss=True: OOD scores '
+                'are computed from the auxiliary semantic branch (sem_queries)')
 
         self.loss_cls = MODELS.build(loss_cls)
         self.loss_mask = MODELS.build(loss_mask)
@@ -690,12 +699,13 @@ class _P3FormerHead(nn.Module):
         return labels, mask_targets, label_weights, mask_weights
 
     def predict(self, batch_inputs, batch_data_samples):
-        class_preds_buffer, mask_preds_buffer, _, _ = self.forward(batch_inputs['features'], batch_inputs['voxels']['voxel_coors'])
+        class_preds_buffer, mask_preds_buffer, _, sem_preds = self.forward(batch_inputs['features'], batch_inputs['voxels']['voxel_coors'])
         semantic_preds, instance_ids = self.generate_panoptic_results(class_preds_buffer[-1], mask_preds_buffer[-1])
         semantic_preds = torch.cat(semantic_preds)
         instance_ids = torch.cat(instance_ids)
         pts_semantic_preds = []
         pts_instance_preds = []
+        pts_ood_scores = [] if self.ood_cfg is not None else None
         coors = batch_inputs['voxels']['voxel_coors']
         for batch_idx in range(len(batch_data_samples)):
             semantic_sample = semantic_preds[coors[:, 0] == batch_idx]
@@ -706,8 +716,22 @@ class _P3FormerHead(nn.Module):
             point_instance_sample = instance_sample[point2voxel_map]
             pts_semantic_preds.append(point_semantic_sample.cpu().numpy())
             pts_instance_preds.append(point_instance_sample.cpu().numpy())
+            if self.ood_cfg is not None:
+                # sem_preds[b] rows follow the same per-sample voxel order
+                # as the panoptic projection above.
+                num_logits = self.ood_cfg.get('num_ood_logits',
+                                              self.num_classes - 1)
+                voxel_logits = sem_preds[batch_idx][:, :num_logits]
+                pts_ood_scores.append(
+                    point_ood_scores(
+                        voxel_logits,
+                        point2voxel_map,
+                        odin_temperature=self.ood_cfg.get(
+                            'odin_temperature', 1000.0),
+                        energy_temperature=self.ood_cfg.get(
+                            'energy_temperature', 1.0)))
 
-        return pts_semantic_preds, pts_instance_preds
+        return pts_semantic_preds, pts_instance_preds, pts_ood_scores
 
     def pa_seg(self, queries, features, mpe, layer):
         if mpe is None:

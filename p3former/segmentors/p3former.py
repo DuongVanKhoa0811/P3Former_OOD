@@ -59,12 +59,21 @@ class _P3Former(Cylinder3D):
     def predict(self, batch_inputs_dict, batch_data_samples, **kwargs):
         x = self.extract_feat(batch_inputs_dict)
         batch_inputs_dict['features'] = x.features
-        pts_semantic_preds, pts_instance_preds = self.decode_head.predict(batch_inputs_dict, batch_data_samples)
-        return self.postprocess_result(pts_semantic_preds, pts_instance_preds, batch_data_samples)
+        pts_semantic_preds, pts_instance_preds, pts_ood_scores = \
+            self.decode_head.predict(batch_inputs_dict, batch_data_samples)
+        return self.postprocess_result(pts_semantic_preds,
+                                       pts_instance_preds,
+                                       batch_data_samples,
+                                       pts_ood_scores)
 
-    def postprocess_result(self, pts_semantic_preds, pts_instance_preds, batch_data_samples):
+    def postprocess_result(self, pts_semantic_preds, pts_instance_preds,
+                           batch_data_samples, pts_ood_scores=None):
         for i in range(len(pts_semantic_preds)):
+            seg_data = {'pts_semantic_mask': pts_semantic_preds[i],
+                        'pts_instance_mask': pts_instance_preds[i]}
+            if pts_ood_scores is not None:
+                for key, value in pts_ood_scores[i].items():
+                    seg_data[f'ood_{key}'] = value
             batch_data_samples[i].set_data(
-                {'pred_pts_seg': PointData(**{'pts_semantic_mask': pts_semantic_preds[i],
-                                                'pts_instance_mask': pts_instance_preds[i]})})
+                {'pred_pts_seg': PointData(**seg_data)})
         return batch_data_samples
