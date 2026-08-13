@@ -90,15 +90,16 @@ def test_points_and_masks():
                                arr['intensity'] / 255.0, rtol=1e-6)
     assert sem.dtype == np.int64 and packed.dtype == np.int64
     np.testing.assert_array_equal(sem, [3, 3, 1, 8, 19, 200])
-    # things keep their instance ids
+    # things keep their instance ids (incl. traffic-sign, raw 19)
     assert packed[0] == (7 << 16) | 3
     assert packed[1] == (7 << 16) | 3
     assert packed[2] == (12 << 16) | 1
+    assert packed[4] == (9 << 16) | 19
     # stuff / unknown classes have instance bits zeroed
     assert packed[3] == 8
-    assert packed[4] == 19
     assert packed[5] == 200
-    assert set(np.asarray(DSO_THING_RAW_IDS).tolist()) == {1, 2, 3, 4, 5, 6, 7}
+    assert set(np.asarray(DSO_THING_RAW_IDS).tolist()) == \
+        {1, 2, 3, 4, 5, 6, 7, 19, 20}
     print('PASS test_points_and_masks')
 
 
@@ -124,7 +125,8 @@ def test_transform_synthetic():
                                   [3, 3, 1, 8, 19, 200])
     np.testing.assert_array_equal(
         results['pts_instance_mask'],
-        [(7 << 16) | 3, (7 << 16) | 3, (12 << 16) | 1, 8, 19, 200])
+        [(7 << 16) | 3, (7 << 16) | 3, (12 << 16) | 1, 8, (9 << 16) | 19,
+         200])
     print('PASS test_transform_synthetic')
 
 

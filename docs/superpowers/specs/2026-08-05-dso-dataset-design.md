@@ -44,9 +44,29 @@ the annotation names used everywhere in this repo (hyphens → spaces,
 Also generated: `dso_infos_mini.pkl` = first 32 frames of
 `(2024-04-29) One-North Route 1 Day` (a train sequence), for smoke tests only.
 
-## 4. Class mapping — 16 train classes, `ignore_index = 16`
+## 4. Class mapping
 
-Train-id order fixed by user: things first (0–6), then stuff (7–15).
+> **Revision 2026-08-14 — supersedes the 16-class table below and every
+> class-count number in §6–§7.** The dataset's class definitions changed
+> (new names; Stop=17 and Others=28 reserved as future OOD classes; Sky=29 /
+> Water Body=30 exist only in the 2D annotation) and the training set is now
+> **24 classes**: 9 things — car(3), bicycle(7), motorcycle(6), truck(4),
+> bus(5), person(1), rider(2), **traffic-sign(19)**, **traffic-cone(20)**
+> (both carry real instance ids) — as train ids 0–8, then 15 stuff in
+> ascending raw-id order — paved-road(8), unpaved-road(9), sidewalk(10),
+> building(11), window(12), perimeter-barrier(13), other-barrier(14),
+> overhead-bridge(15), gate(16), pole-like-object(18), drain(21),
+> terrain(22), trunks(23), vegetation(24), obscurant(27) — as train ids
+> 9–23. `ignore_index = 24`; raw {0, 17, 28, 29, 30, 255} and any unlisted
+> id map to ignore. `DSO_THING_RAW_IDS = (1..7, 19, 20)` — the loader keeps
+> instance bits for signs/cones now. Head: `num_classes=25`,
+> `cls_channels=(256, 256, 25)`, `thing_class=[0..8]`,
+> `stuff_class=[9..23]`. Models trained under the old 16-class setup are
+> incompatible and must be retrained. The authoritative mapping lives in
+> `configs/_base_/datasets/dso_panoptic_lpmix.py`.
+
+Original (superseded) 16-class setup — train-id order fixed by user: things
+first (0–6), then stuff (7–15).
 
 | train id | class | raw id | role | palette (dataset RGB) |
 |---|---|---|---|---|

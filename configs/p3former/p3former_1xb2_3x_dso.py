@@ -26,16 +26,18 @@ model = dict(
         more_conv=True,
         out_channels=256),
     decode_head=dict(
-        num_classes=17,
+        num_classes=25,
         num_decoder_layers=6,
         num_queries=128,
         embed_dims=256,
         point_cloud_range=point_cloud_range,
-        cls_channels=(256, 256, 17),
+        cls_channels=(256, 256, 25),
         mask_channels=(256, 256, 256, 256, 256),
-        thing_class=[0, 1, 2, 3, 4, 5, 6],
-        stuff_class=[7, 8, 9, 10, 11, 12, 13, 14, 15],
-        ignore_index=16))
+        thing_class=[0, 1, 2, 3, 4, 5, 6, 7, 8],
+        stuff_class=[
+            9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23
+        ],
+        ignore_index=24))
 
 lr = 0.0008
 optim_wrapper = dict(

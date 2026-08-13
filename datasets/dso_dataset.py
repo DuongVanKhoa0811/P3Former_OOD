@@ -13,24 +13,35 @@ from mmdet3d.registry import DATASETS
 class _DSODataset(Seg3DDataset):
     r"""DSO Dataset.
 
-    16 train classes in a fixed order: 7 things (car, bicycle, motorcycle,
-    truck, bus, person, rider) then 9 stuff (road, sidewalk, building, fence,
-    vegetation, trunk, terrain, pole, traffic-sign); ``ignore_index`` is 16.
+    24 train classes in a fixed order (2026-08-14 class-set revision):
+    9 things (car, bicycle, motorcycle, truck, bus, person, rider,
+    traffic-sign, traffic-cone) then 15 stuff in ascending raw-id order
+    (paved-road, unpaved-road, sidewalk, building, window,
+    perimeter-barrier, other-barrier, overhead-bridge, gate,
+    pole-like-object, drain, terrain, trunks, vegetation, obscurant);
+    ``ignore_index`` is 24. Raw 17 (Stop) and 28 (Others) are reserved as
+    future OOD classes; 29/30 are 2D-only.
     The raw->train mapping comes from ``metainfo['seg_label_mapping']`` in the
     config; every raw id not listed there falls to ignore (the SemanticKITTI
     variant zero-fills instead, which would silently map stray ids to car).
     """
     METAINFO = {
         'classes': ('car', 'bicycle', 'motorcycle', 'truck', 'bus', 'person',
-                    'rider', 'road', 'sidewalk', 'building', 'fence',
-                    'vegetation', 'trunk', 'terrain', 'pole', 'traffic-sign'),
+                    'rider', 'traffic-sign', 'traffic-cone', 'paved-road',
+                    'unpaved-road', 'sidewalk', 'building', 'window',
+                    'perimeter-barrier', 'other-barrier', 'overhead-bridge',
+                    'gate', 'pole-like-object', 'drain', 'terrain', 'trunks',
+                    'vegetation', 'obscurant'),
         'palette': [[125, 46, 141], [255, 127, 0], [255, 0, 0],
                     [118, 171, 47], [161, 19, 46], [216, 82, 24],
-                    [236, 176, 31], [190, 190, 0], [0, 0, 255],
-                    [170, 0, 255], [84, 255, 0], [84, 0, 127], [0, 255, 127],
-                    [0, 170, 127], [255, 84, 0], [255, 170, 0]],
+                    [236, 176, 31], [255, 170, 0], [255, 255, 0],
+                    [190, 190, 0], [0, 255, 0], [0, 0, 255], [170, 0, 255],
+                    [84, 84, 0], [84, 170, 0], [84, 255, 0], [170, 84, 0],
+                    [170, 170, 0], [255, 84, 0], [0, 84, 127], [0, 170, 127],
+                    [0, 255, 127], [84, 0, 127], [84, 255, 127]],
         'seg_valid_class_ids':
-        (3, 7, 6, 4, 5, 1, 2, 8, 10, 11, 14, 24, 23, 22, 18, 19),
+        (3, 7, 6, 4, 5, 1, 2, 19, 20, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18,
+         21, 22, 23, 24, 27),
         'seg_all_class_ids':
         tuple(range(256)),
     }
