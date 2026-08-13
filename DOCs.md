@@ -143,3 +143,29 @@ Notes:
   (submission-only, via the `_submit` config).
 - The two DSO evals contend with whatever is training on GPU 1; run them after the
   SemanticKITTI 1xb2 run finishes (or on GPU 0 when it is free — eval is light).
+
+
+
+## 2026-08-14 — DSO class-set revision (24 classes)
+
+The DSO class definitions changed (new names; e.g. road→Paved Road, fence→Other Barrier,
+net-fence→Perimeter Barrier). Training now covers **24 classes** instead of 16:
+
+- **Things (train 0–8):** car, bicycle, motorcycle, truck, bus, person, rider,
+  **traffic-sign** (raw 19), **traffic-cone** (raw 20) — signs/cones carry real instance ids
+  (~17.6 and ~4.2 per frame) and are now things; the loader keeps their instance bits
+  (`DSO_THING_RAW_IDS` gained 19, 20).
+- **Stuff (train 9–23):** paved-road, unpaved-road, sidewalk, building, window,
+  perimeter-barrier, other-barrier, overhead-bridge, gate, pole-like-object, drain, terrain,
+  trunks, vegetation, obscurant (ascending raw id).
+- **Ignored (→ 24):** Noise (0), **Stop (17)** and **Others (28)** — reserved as future OOD
+  classes — Sky (29) and Water Body (30) — 2D-only — Unlabelled (255).
+
+Head is now 25-way (`num_classes=25`, `cls_channels=(256,256,25)`); pkls/splits unchanged.
+**Old 16-class checkpoints are incompatible — DSO must be retrained** (same commands as
+2026-08-06; smoke-verified: 19.6 GB at batch 2, so the 4xb1 A5000 OOM situation is unchanged).
+Committed on `dso-dataset`, merged into `ood-baselines`.
+
+Caveat for eval: many traffic-cone instances are below the `min_num_points=50` PQ cutoff
+(~40 pts/instance on average), so cone PQ reflects only the larger instances — standard
+SemanticKITTI convention, left as is.

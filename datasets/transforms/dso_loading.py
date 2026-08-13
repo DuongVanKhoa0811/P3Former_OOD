@@ -22,11 +22,12 @@ from mmcv.transforms.base import BaseTransform
 from mmdet3d.registry import TRANSFORMS
 from mmdet3d.structures.points import get_points_type
 
-# Raw semantic ids of the 7 thing classes (person, rider, car, truck, bus,
-# motorcycle, bicycle). Instance ids of every other class are dropped so that
-# a stuff class forms exactly one GT segment per frame (traffic-sign carries
-# ~17 real instance ids per frame in the raw labels).
-DSO_THING_RAW_IDS = (1, 2, 3, 4, 5, 6, 7)
+# Raw semantic ids of the 9 thing classes (person, rider, car, truck, bus,
+# motorcycle, bicycle, traffic-sign, traffic-cone — 2026-08-14 revision).
+# Instance ids of every other class are dropped so that a stuff class forms
+# exactly one GT segment per frame (the raw labels give each stuff class a
+# dummy per-frame instance id).
+DSO_THING_RAW_IDS = (1, 2, 3, 4, 5, 6, 7, 19, 20)
 
 _PLY_TO_NUMPY = {
     b'int8': 'i1', b'char': 'i1',
