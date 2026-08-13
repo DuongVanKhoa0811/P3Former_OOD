@@ -68,8 +68,6 @@ Results (4071 val scans, ~6.5 min on one RTX 6000 Ada, ~1.2 GB GPU memory):
 
 Matches the reference PQ 62.6 for this checkpoint.
 
-
-
 ## 2026-08-06 — Training commands
 
 DSO (this machine, single GPU — ~0.9 s/iter, ~18.8 GB at batch 2, ≈40 h for 36 epochs):
@@ -102,7 +100,7 @@ Notes:
 - `PORT=29511 ...` in front of dist_train.sh if the default port is busy.
 - Outputs land in `work_dirs/<config-name>/`; checkpoints every 5 epochs, val PQ table every epoch.
 - Run status: DSO 1xb2 ✅ done · SemanticKITTI 4xb1 ✅ done · SemanticKITTI 1xb2 🔄 running ·
-  DSO 4xb1 ❌ out-of-memory on 24 GB A5000s (DSO frames are ~416k pts; no checkpoint produced).
+DSO 4xb1 ❌ out-of-memory on 24 GB A5000s (DSO frames are ~416k pts; no checkpoint produced).
 
 
 
@@ -130,16 +128,42 @@ SemanticKITTI 1xb2 — val split (4071 scans; run after training finishes):
 CUDA_VISIBLE_DEVICES=1 python test.py configs/p3former/p3former_1xb2_3x_semantickitti.py work_dirs/p3former_1xb2_3x_semantickitti/epoch_36.pth
 ```
 
-SemanticKITTI 4xb1 — val split, on the A5000 server (4-GPU eval; single-GPU
-`CUDA_VISIBLE_DEVICES=0 python test.py ...` works too, eval needs only ~1-2 GB):
+SemanticKITTI 4xb1 — val split:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1,2,3 bash dist_test.sh configs/p3former/p3former_4xb1_3x_semantickitti.py work_dirs/p3former_4xb1_3x_semantickitti/epoch_36.pth 4
+CUDA_VISIBLE_DEVICES=1 python test.py configs/p3former/p3former_4xb1_3x_semantickitti.py work_dirs/p3former_4xb1_3x_semantickitti/epoch_36.pth
 ```
 
 Notes:
 
 - SemanticKITTI "testing" means the val split — the official test split is unlabeled
-  (submission-only, via the `_submit` config).
+(submission-only, via the `_submit` config).
 - The two DSO evals contend with whatever is training on GPU 1; run them after the
-  SemanticKITTI 1xb2 run finishes (or on GPU 0 when it is free — eval is light).
+SemanticKITTI 1xb2 run finishes (or on GPU 0 when it is free — eval is light).
+
+## 2026-08-12 — Point-level OOD baselines (MSP / MaxLogit / ODIN / Energy)
+
+Post-hoc OOD scoring from the aux semantic branch; OOD classes = raw 52
+(other-structure) + 99 (other-object); raw 0/1 (unlabeled/outlier) excluded. Spec:
+`docs/superpowers/specs/2026-08-12-ood-baselines-design.md`, branch `ood-baselines`.
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python test.py configs/p3former/p3former_8xb2_3x_semantickitti_ood.py checkpoint/semantickitti_val_62.6.pth
+```
+
+Results (val, 4071 scans, official checkpoint; PQ table unchanged at 62.63;
+476.8M ID / 9.4M OOD points = 1.94% OOD):
+
+| method   | AUROC | AP    | FPR@95 |
+| -------- | ----- | ----- | ------ |
+| MSP      | 87.48 | 16.29 | 43.45  |
+| MaxLogit | 91.28 | 40.28 | 39.98  |
+| ODIN     | 90.87 | 32.42 | 40.70  |
+| Energy   | 91.59 | 43.71 | 39.98  |
+
+ODIN = temperature-scaled MSP (T=1000, ε=0 per docs/others/baselines/OOD_Baseline.pdf);
+Energy uses T=1. Higher score = more OOD everywhere. Smoke test: add
+`--cfg-options test_dataloader.dataset.dataset.ann_file=semantickitti_infos_mini.pkl`
+(20-scan mini pkl generated from the val infos). Unit tests: `tests/test_ood_scores.py`,
+`tests/test_ood_eval.py`, `tests/test_ood_metric.py`.
+
