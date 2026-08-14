@@ -169,3 +169,12 @@ Committed on `dso-dataset`, merged into `ood-baselines`.
 Caveat for eval: many traffic-cone instances are below the `min_num_points=50` PQ cutoff
 (~40 pts/instance on average), so cone PQ reflects only the larger instances — standard
 SemanticKITTI convention, left as is.
+
+Update: the 24-class 1xb2 run OOM'd mid-epoch-3 in the thing-mask loss (~27 GB allocation
+spike on instance-dense frames — signs/cones roughly double the thing masks; the run also
+shared GPU 0 with a ~15 GB job). Use the 2-GPU batch-1 config instead (same effective
+batch 2, ~half the per-GPU activations):
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 bash dist_train.sh configs/p3former/p3former_2xb1_3x_dso.py 2
+```
