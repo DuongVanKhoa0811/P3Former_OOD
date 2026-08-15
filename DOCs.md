@@ -201,3 +201,20 @@ batch 2, ~half the per-GPU activations):
 ```bash
 CUDA_VISIBLE_DEVICES=0,1 bash dist_train.sh configs/p3former/p3former_2xb1_3x_dso.py 2
 ```
+
+
+## 2026-08-15 — 2xb1 SemanticKITTI config; DSO 24-class test commands
+
+SemanticKITTI on both of this machine's GPUs (batch 1 per GPU, effective batch 2 — same
+recipe as 1xb2, ~half the per-GPU memory and wall-clock):
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 bash dist_train.sh configs/p3former/p3former_2xb1_3x_semantickitti.py 2
+```
+
+DSO 24-class run — held-out test split (2,625 frames; One-North Route 2 Day + the two rural
+Ubin routes). Without the `--cfg-options` override, test.py evaluates the val split:
+
+```bash
+CUDA_VISIBLE_DEVICES=1 python test.py configs/p3former/p3former_2xb1_3x_dso.py work_dirs/p3former_2xb1_3x_dso/epoch_36.pth --cfg-options test_dataloader.dataset.dataset.ann_file=dso_infos_test.pkl
+```
