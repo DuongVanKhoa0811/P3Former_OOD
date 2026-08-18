@@ -238,3 +238,40 @@ Evaluate the 24-class model on them with the usual override, e.g.:
 ```bash
 CUDA_VISIBLE_DEVICES=1 python test.py configs/p3former/p3former_2xb1_3x_dso.py work_dirs/p3former_2xb1_3x_dso/epoch_36.pth --cfg-options test_dataloader.dataset.dataset.ann_file=dso_infos_test_cetran.pkl
 ```
+
+## 2026-08-19 — Point-level OOD baselines on DSO (MSP / MaxLogit / ODIN / Energy)
+
+Same post-hoc protocol as the 2026-08-12 SemanticKITTI entry, ported to the 24-class DSO
+model via `configs/p3former/p3former_2xb1_3x_dso_ood.py`: scores from the first 24 channels
+of the aux semantic branch; OOD = raw 17 (Stop) + 28 (Others); raw 0/29/30/255
+(Noise/Sky/Water Body/Unlabelled) excluded. Checkpoint:
+`work_dirs/p3former_2xb1_3x_dso/epoch_36.pth`.
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python test.py configs/p3former/p3former_2xb1_3x_dso_ood.py work_dirs/p3former_2xb1_3x_dso/epoch_36.pth --work-dir work_dirs/p3former_2xb1_3x_dso_ood/test --cfg-options test_dataloader.dataset.dataset.ann_file=dso_infos_test.pkl
+CUDA_VISIBLE_DEVICES=1 python test.py configs/p3former/p3former_2xb1_3x_dso_ood.py work_dirs/p3former_2xb1_3x_dso/epoch_36.pth --work-dir work_dirs/p3former_2xb1_3x_dso_ood/test_cetran --cfg-options test_dataloader.dataset.dataset.ann_file=dso_infos_test_cetran.pkl
+```
+
+Held-out test split (2,625 frames; PQ 46.50, mIoU 48.66; 1.008B ID / 15.9M OOD points
+= 1.55% OOD):
+
+| method   | AUROC | AP    | FPR@95 |
+| -------- | ----- | ----- | ------ |
+| MSP      | 86.26 | 13.76 | 51.15  |
+| MaxLogit | 92.08 | 34.24 | 42.70  |
+| ODIN     | 86.53 | 19.51 | 69.63  |
+| Energy   | 92.36 | 35.47 | 42.55  |
+
+Test + Cetran (3,605 frames; PQ 46.19, mIoU 47.94; 1.261B ID / 23.6M OOD points
+= 1.84% OOD):
+
+| method   | AUROC | AP    | FPR@95 |
+| -------- | ----- | ----- | ------ |
+| MSP      | 87.76 | 18.06 | 45.76  |
+| MaxLogit | 92.67 | 35.90 | 38.12  |
+| ODIN     | 89.36 | 27.19 | 55.64  |
+| Energy   | 92.88 | 35.55 | 37.94  |
+
+Energy and MaxLogit are the strongest on both splits (as on SemanticKITTI); ODIN's
+T=1000 flattening hurts noticeably more here than on SemanticKITTI. Smoke test: 5-frame
+`dso_infos_mini.pkl` (frames of `dso_infos_test.pkl` verified to contain Stop/Others).
