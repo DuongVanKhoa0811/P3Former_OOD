@@ -29,7 +29,24 @@ TRAIN_SEQUENCES = [
     '(2024-06-10) Chinatown Route 2 Night',
     '(2025-02-27) Tiong Bahru Rerun AM',
 ]
-EXPECTED_TOTALS = {'train': 8474, 'val': 401, 'test': 2625}
+# Optional Cetran AV-test-centre sequences (added to Annotation_Final after
+# the main 12; verified non-overlapping by manual review of the per-frame
+# PNGs — the 01-28 "AM-clean" re-export shares some frame stems with "AM"
+# but covers different content). They feed the optional 'cetran' and
+# 'test_cetran' sets, never train/val, and are only generated when all
+# three dirs are present.
+CETRAN_SEQUENCES = [
+    '(2026-01-28) Cetran Run AM',
+    '(2026-01-28) Cetran Run AM-clean',
+    '(2026-02-04) Cetran Run AM',
+]
+EXPECTED_TOTALS = {
+    'train': 8474,
+    'val': 401,
+    'test': 2625,
+    'cetran': 980,
+    'test_cetran': 3605,
+}
 MINI_SEQUENCE = '(2024-04-29) One-North Route 1 Day'
 MINI_NUM_FRAMES = 32
 
@@ -73,7 +90,7 @@ def create_dso_info_file(pkl_prefix, save_path):
     if missing:
         raise RuntimeError(
             f'missing split sequences under {ann_dir}: {missing}')
-    extra = sorted(found - expected)
+    extra = sorted(found - expected - set(CETRAN_SEQUENCES))
     if extra:
         # The 12-sequence split is fixed; new recordings dropped into the
         # annotation dir are not silently absorbed into any split.
@@ -86,20 +103,35 @@ def create_dso_info_file(pkl_prefix, save_path):
         'test': TEST_SEQUENCES,
     }
     for split, sequences in splits.items():
-        data_list = []
-        for sequence in sequences:
-            data_list.extend(_frame_infos(ann_dir, sequence))
-        if len(data_list) != EXPECTED_TOTALS[split]:
-            raise RuntimeError(f'{split}: found {len(data_list)} frames, '
-                               f'expected {EXPECTED_TOTALS[split]}')
-        infos = dict(metainfo=dict(DATASET='DSO'), data_list=data_list)
-        filename = save_path / f'{pkl_prefix}_infos_{split}.pkl'
-        mmengine.dump(infos, filename)
-        print(f'DSO info {split} ({len(data_list)} frames) '
-              f'is saved to {filename}')
+        _write_split(ann_dir, save_path, pkl_prefix, split, sequences)
 
     mini_list = _frame_infos(ann_dir, MINI_SEQUENCE, limit=MINI_NUM_FRAMES)
     infos = dict(metainfo=dict(DATASET='DSO'), data_list=mini_list)
     filename = save_path / f'{pkl_prefix}_infos_mini.pkl'
     mmengine.dump(infos, filename)
     print(f'DSO info mini ({len(mini_list)} frames) is saved to {filename}')
+
+    missing_cetran = sorted(set(CETRAN_SEQUENCES) - found)
+    if missing_cetran:
+        print('skipping cetran/test_cetran pkls: missing sequence dirs '
+              f'{missing_cetran}')
+    else:
+        _write_split(ann_dir, save_path, pkl_prefix, 'cetran',
+                     CETRAN_SEQUENCES)
+        _write_split(ann_dir, save_path, pkl_prefix, 'test_cetran',
+                     TEST_SEQUENCES + CETRAN_SEQUENCES)
+
+
+def _write_split(ann_dir, save_path, pkl_prefix, split, sequences):
+    """Collect the frames of one split, validate the total, dump the pkl."""
+    data_list = []
+    for sequence in sequences:
+        data_list.extend(_frame_infos(ann_dir, sequence))
+    if len(data_list) != EXPECTED_TOTALS[split]:
+        raise RuntimeError(f'{split}: found {len(data_list)} frames, '
+                           f'expected {EXPECTED_TOTALS[split]}')
+    infos = dict(metainfo=dict(DATASET='DSO'), data_list=data_list)
+    filename = save_path / f'{pkl_prefix}_infos_{split}.pkl'
+    mmengine.dump(infos, filename)
+    print(f'DSO info {split} ({len(data_list)} frames) '
+          f'is saved to {filename}')
