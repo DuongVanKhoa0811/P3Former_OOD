@@ -44,6 +44,10 @@ def test_split_membership_and_structure():
         val = mmengine.load(os.path.join(tmp, 'dso_infos_val.pkl'))
         test = mmengine.load(os.path.join(tmp, 'dso_infos_test.pkl'))
         mini = mmengine.load(os.path.join(tmp, 'dso_infos_mini.pkl'))
+        # no Cetran dirs in this tree -> the optional sets are skipped
+        assert not os.path.exists(os.path.join(tmp, 'dso_infos_cetran.pkl'))
+        assert not os.path.exists(
+            os.path.join(tmp, 'dso_infos_test_cetran.pkl'))
     assert train['metainfo'] == {'DATASET': 'DSO'}
     assert len(train['data_list']) == 24
     assert len(val['data_list']) == 3 and len(test['data_list']) == 9
@@ -79,13 +83,17 @@ def test_missing_sequence_raises():
 
 
 def test_extra_sequence_ignored():
-    """Extra dirs (e.g. newly added recordings) are ignored with a notice;
-    the fixed 12-sequence split is authoritative."""
+    """Unknown extra dirs are ignored with a notice; a PARTIAL Cetran set
+    (not all three dirs) skips the optional pkls instead of failing."""
     with tempfile.TemporaryDirectory() as tmp:
         _fake_annotations(tmp, frames_per_seq=3)
-        extra = os.path.join(tmp, 'annotations', '(2026-01-28) Cetran Run AM')
+        extra = os.path.join(tmp, 'annotations', '(2099-01-01) Surprise Run')
         os.makedirs(extra)
         write_ply(os.path.join(extra, '00000000.ply'), make_frame())
+        partial = os.path.join(tmp, 'annotations',
+                               dso_converter.CETRAN_SEQUENCES[0])
+        os.makedirs(partial)
+        write_ply(os.path.join(partial, '00000000.ply'), make_frame())
         real_totals = dso_converter.EXPECTED_TOTALS
         real_mini = dso_converter.MINI_NUM_FRAMES
         dso_converter.EXPECTED_TOTALS = {'train': 24, 'val': 3, 'test': 9}
@@ -96,10 +104,51 @@ def test_extra_sequence_ignored():
             dso_converter.EXPECTED_TOTALS = real_totals
             dso_converter.MINI_NUM_FRAMES = real_mini
         train = mmengine.load(os.path.join(tmp, 'dso_infos_train.pkl'))
+        assert not os.path.exists(os.path.join(tmp, 'dso_infos_cetran.pkl'))
+        assert not os.path.exists(
+            os.path.join(tmp, 'dso_infos_test_cetran.pkl'))
     seqs = {e['sample_id'].split('/')[0] for e in train['data_list']}
-    assert '(2026-01-28) Cetran Run AM' not in seqs
+    assert '(2099-01-01) Surprise Run' not in seqs
+    assert dso_converter.CETRAN_SEQUENCES[0] not in seqs
     assert len(train['data_list']) == 24
     print('PASS test_extra_sequence_ignored')
+
+
+def test_cetran_sets_generated():
+    """With all three Cetran dirs present, the optional cetran and
+    test_cetran (= test + cetran) pkls are written."""
+    with tempfile.TemporaryDirectory() as tmp:
+        _fake_annotations(tmp, frames_per_seq=3)
+        for seq in dso_converter.CETRAN_SEQUENCES:
+            d = os.path.join(tmp, 'annotations', seq)
+            os.makedirs(d)
+            for i in range(3):
+                write_ply(os.path.join(d, f'{i:08d}.ply'), make_frame())
+        real_totals = dso_converter.EXPECTED_TOTALS
+        real_mini = dso_converter.MINI_NUM_FRAMES
+        dso_converter.EXPECTED_TOTALS = {'train': 24, 'val': 3, 'test': 9,
+                                         'cetran': 9, 'test_cetran': 18}
+        dso_converter.MINI_NUM_FRAMES = 2
+        try:
+            dso_converter.create_dso_info_file('dso', tmp)
+        finally:
+            dso_converter.EXPECTED_TOTALS = real_totals
+            dso_converter.MINI_NUM_FRAMES = real_mini
+        cet = mmengine.load(os.path.join(tmp, 'dso_infos_cetran.pkl'))
+        tc = mmengine.load(os.path.join(tmp, 'dso_infos_test_cetran.pkl'))
+    assert len(cet['data_list']) == 9
+    assert len(tc['data_list']) == 18
+    cet_seqs = {e['sample_id'].split('/')[0] for e in cet['data_list']}
+    assert cet_seqs == set(dso_converter.CETRAN_SEQUENCES)
+    tc_seqs = {e['sample_id'].split('/')[0] for e in tc['data_list']}
+    assert tc_seqs == (set(dso_converter.TEST_SEQUENCES)
+                       | set(dso_converter.CETRAN_SEQUENCES))
+    # ordering inside test_cetran: the test sequences first, then Cetran
+    assert tc['data_list'][0]['sample_id'].split('/')[0] == \
+        dso_converter.TEST_SEQUENCES[0]
+    assert tc['data_list'][-1]['sample_id'].split('/')[0] == \
+        dso_converter.CETRAN_SEQUENCES[-1]
+    print('PASS test_cetran_sets_generated')
 
 
 def test_wrong_frame_count_raises():
@@ -118,5 +167,6 @@ if __name__ == '__main__':
     test_split_membership_and_structure()
     test_missing_sequence_raises()
     test_extra_sequence_ignored()
+    test_cetran_sets_generated()
     test_wrong_frame_count_raises()
     print('ALL TESTS PASSED')

@@ -196,3 +196,23 @@ Ubin routes). Without the `--cfg-options` override, test.py evaluates the val sp
 ```bash
 CUDA_VISIBLE_DEVICES=1 python test.py configs/p3former/p3former_2xb1_3x_dso.py work_dirs/p3former_2xb1_3x_dso/epoch_36.pth --cfg-options test_dataloader.dataset.dataset.ann_file=dso_infos_test.pkl
 ```
+
+
+
+## 2026-08-18 — Cetran test sets
+
+The three Cetran AV-test-centre sequences (401 + 202 + 377 = 980 frames, ~300k pts/frame,
+fully labeled; both future-OOD classes Stop/Others present in all three) are now optional
+test sets. Manual review of the per-frame PNGs confirmed the three runs cover
+non-overlapping content (the 01-28 "AM-clean" re-export shares frame stems with "AM" but
+different scenes). `create_data.py dso` writes them only when all three dirs exist and they
+never enter train/val:
+
+- `dso_infos_cetran.pkl` — Cetran only (980 frames)
+- `dso_infos_test_cetran.pkl` — held-out test + Cetran (3,605 frames)
+
+Evaluate the 24-class model on them with the usual override, e.g.:
+
+```bash
+CUDA_VISIBLE_DEVICES=1 python test.py configs/p3former/p3former_2xb1_3x_dso.py work_dirs/p3former_2xb1_3x_dso/epoch_36.pth --cfg-options test_dataloader.dataset.dataset.ann_file=dso_infos_test_cetran.pkl
+```
