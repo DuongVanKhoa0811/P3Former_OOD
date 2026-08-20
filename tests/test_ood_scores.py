@@ -20,7 +20,8 @@ def test_score_keys_and_shapes():
     logits = torch.randn(7, 19)
     scores = compute_ood_scores(logits)
     assert tuple(scores.keys()) == OOD_SCORE_KEYS == ('msp', 'maxlogit',
-                                                      'odin', 'energy')
+                                                      'odin', 'energy',
+                                                      'entropy')
     for key in OOD_SCORE_KEYS:
         assert scores[key].shape == (7, ), key
     print('PASS test_score_keys_and_shapes')
@@ -38,6 +39,9 @@ def test_known_values_two_classes():
     assert torch.allclose(scores['odin'], torch.tensor([-p_max_T]), atol=1e-7)
     energy = -math.log(math.exp(2.0) + 1.0)
     assert torch.allclose(scores['energy'], torch.tensor([energy]), atol=1e-6)
+    entropy = -(p_max * math.log(p_max) + (1 - p_max) * math.log(1 - p_max))
+    assert torch.allclose(scores['entropy'], torch.tensor([entropy]),
+                          atol=1e-6)
     print('PASS test_known_values_two_classes')
 
 
@@ -55,7 +59,24 @@ def test_uniform_logits_are_most_ood():
     assert torch.allclose(scores['maxlogit'][1], torch.tensor(0.0))
     assert torch.allclose(scores['energy'][1],
                           torch.tensor(-math.log(19.0)), atol=1e-6)
+    # uniform distribution has the maximum entropy log(C)
+    assert torch.allclose(scores['entropy'][1],
+                          torch.tensor(math.log(19.0)), atol=1e-6)
+    assert scores['entropy'][0] < 1e-3  # near one-hot -> near zero entropy
     print('PASS test_uniform_logits_are_most_ood')
+
+
+def test_entropy_matches_reference_formula():
+    # Reference: trash/Done/eval_ood_from_logits.py (softmax, clip 1e-12).
+    rng = np.random.RandomState(0)
+    z = rng.randn(50, 19) * 3.0
+    p = np.exp(z - z.max(1, keepdims=True))
+    p /= p.sum(1, keepdims=True)
+    pc = np.clip(p, 1e-12, None)
+    expected = -(pc * np.log(pc)).sum(1)
+    scores = compute_ood_scores(torch.from_numpy(z).float())
+    assert np.allclose(scores['entropy'].numpy(), expected, atol=1e-5)
+    print('PASS test_entropy_matches_reference_formula')
 
 
 def test_energy_temperature():
@@ -110,6 +131,7 @@ if __name__ == '__main__':
     test_score_keys_and_shapes()
     test_known_values_two_classes()
     test_uniform_logits_are_most_ood()
+    test_entropy_matches_reference_formula()
     test_energy_temperature()
     test_odin_is_temperature_scaled_msp()
     test_numerical_stability_huge_logits()

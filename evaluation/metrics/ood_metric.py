@@ -30,7 +30,7 @@ class _OODPointMetric(BaseMetric):
                  seg_offset: int = 2**16,
                  ignore_index: int = 19,
                  score_keys: Sequence[str] = ('msp', 'maxlogit', 'odin',
-                                              'energy'),
+                                              'energy', 'entropy'),
                  collect_device: str = 'cpu',
                  prefix: Optional[str] = None) -> None:
         super().__init__(collect_device=collect_device, prefix=prefix)

@@ -84,6 +84,14 @@ def test_missing_score_key_message():
     print('PASS test_missing_score_key_message')
 
 
+def test_default_score_keys():
+    # The configs rely on the default: it must cover every emitted score.
+    from p3former.utils.ood_scores import OOD_SCORE_KEYS
+    assert _OODPointMetric().score_keys == OOD_SCORE_KEYS == (
+        'msp', 'maxlogit', 'odin', 'energy', 'entropy')
+    print('PASS test_default_score_keys')
+
+
 def test_length_mismatch_rejected():
     metric = _OODPointMetric(score_keys=('msp', ))
     try:
@@ -98,5 +106,6 @@ if __name__ == '__main__':
     test_gt_derivation_and_perfect_scores()
     test_accumulates_across_scans()
     test_missing_score_key_message()
+    test_default_score_keys()
     test_length_mismatch_rejected()
     print('ALL TESTS PASSED')

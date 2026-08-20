@@ -3,7 +3,8 @@
 All scores follow the convention: higher score = more OOD (REL, ISPRS 2026,
 Eq. 2). Hyperparameters follow docs/others/baselines/OOD_Baseline.pdf:
 ODIN uses temperature 1000 with epsilon = 0 (no input perturbation), the
-Energy score uses temperature 1.
+Energy score uses temperature 1. Entropy is the Shannon entropy of the
+softmax distribution (natural log), as in trash/Done/eval_ood_from_logits.py.
 """
 from typing import Dict
 
@@ -11,7 +12,7 @@ import numpy as np
 import torch
 
 # Canonical method order; evaluation tables and pred_pts_seg keys follow it.
-OOD_SCORE_KEYS = ('msp', 'maxlogit', 'odin', 'energy')
+OOD_SCORE_KEYS = ('msp', 'maxlogit', 'odin', 'energy', 'entropy')
 
 
 def compute_ood_scores(logits: torch.Tensor,
@@ -40,6 +41,10 @@ def compute_ood_scores(logits: torch.Tensor,
                                     dim=1).max(dim=1).values
     scores['energy'] = -energy_temperature * torch.logsumexp(
         logits / energy_temperature, dim=1)
+    # Shannon entropy of the softmax; log_softmax keeps p*log(p) finite
+    # (and -> 0) for vanishing probabilities without an explicit clip.
+    log_probs = torch.log_softmax(logits, dim=1)
+    scores['entropy'] = -(log_probs.exp() * log_probs).sum(dim=1)
     return scores
 
 

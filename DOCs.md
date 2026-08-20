@@ -275,3 +275,12 @@ Test + Cetran (3,605 frames; PQ 46.19, mIoU 47.94; 1.261B ID / 23.6M OOD points
 Energy and MaxLogit are the strongest on both splits (as on SemanticKITTI); ODIN's
 T=1000 flattening hurts noticeably more here than on SemanticKITTI. Smoke test: 5-frame
 `dso_infos_mini.pkl` (frames of `dso_infos_test.pkl` verified to contain Stop/Others).
+
+## 2026-08-21 — Entropy added as a fifth OOD score
+
+`entropy` = softmax Shannon entropy `−Σ_c p_c log p_c` (natural log, higher = more OOD;
+as in `trash/Done/eval_ood_from_logits.py`). Emitted as `ood_entropy` and included in
+`_OODPointMetric`'s default keys — no config changes. The tables above predate it; re-run
+the three eval commands (2026-08-12 and 2026-08-19 entries) to add the Entropy row — the
+other rows are deterministic. Note: one eval needs ~17 GB GPU memory; it OOMs in spconv
+(`cuda execution failed with error 2`) when less is free.

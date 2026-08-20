@@ -39,6 +39,7 @@ All scores are computed from per-voxel class logits `z ∈ R^19` and projected t
 | MaxLogit | `− max_c z_c`                      | — (Hendrycks et al., ICML 2022)                                |
 | ODIN     | `− max_c softmax_T(z)_c`           | T = 1000, ε = 0 (per VOS/SAFE convention; ε = 0 means **no** input-gradient perturbation) |
 | Energy   | `− T · log Σ_c exp(z_c / T)`       | T = 1 (Liu et al., NeurIPS 2020; free energy, higher for OOD)  |
+| Entropy  | `− Σ_c softmax_1(z)_c · log softmax_1(z)_c` | — (Shannon entropy of the softmax, natural log; added 2026-08-19 following `trash/Done/eval_ood_from_logits.py`) |
 
 Numerical safety: softmax/logsumexp computed with the max-subtraction trick
 (`torch.softmax` / `torch.logsumexp` already do this).
