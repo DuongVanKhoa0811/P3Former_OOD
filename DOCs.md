@@ -161,6 +161,16 @@ Results (val, 4071 scans, official checkpoint; PQ table unchanged at 62.63;
 | ODIN     | 90.87 | 32.42 | 40.70  |
 | Energy   | 91.59 | 43.71 | 39.98  |
 | Entropy  | 88.57 | 24.70 | 42.91  |
+| Group MSP      | 90.11 | 17.17 | 36.89  |
+| Group MaxLogit | 91.28 | 40.28 | 39.98  |
+| Group ODIN     | 33.45 |  1.30 | 93.68  |
+| Group Energy   | 91.51 | 41.97 | 39.96  |
+| Group Entropy  | 90.55 | 24.32 | 36.50  |
+| GN MSP         | 68.69 | 12.01 | 89.41  |
+| GN MaxLogit    | 89.75 | 36.29 | 45.16  |
+| GN ODIN        | 89.02 | 13.17 | 40.55  |
+| GN Energy      | 89.93 | 37.70 | 45.17  |
+| GN Entropy     | 68.68 | 10.88 | 89.41  |
 
 ODIN = temperature-scaled MSP (T=1000, ε=0 per docs/others/baselines/OOD_Baseline.pdf);
 Energy uses T=1. Higher score = more OOD everywhere. Smoke test: add
@@ -263,6 +273,16 @@ Held-out test split (2,625 frames; PQ 46.50, mIoU 48.66; 1.008B ID / 15.9M OOD p
 | ODIN     | 86.53 | 19.51 | 69.63  |
 | Energy   | 92.36 | 35.47 | 42.55  |
 | Entropy  | 87.84 | 20.23 | 50.40  |
+| Group MSP      | 89.33 | 14.50 | 45.99  |
+| Group MaxLogit | 92.08 | 34.24 | 42.70  |
+| Group ODIN     | 22.40 |  0.92 | 96.21  |
+| Group Energy   | 92.35 | 35.01 | 42.56  |
+| Group Entropy  | 89.67 | 18.91 | 46.41  |
+| GN MSP         | 92.35 | 18.08 | 34.11  |
+| GN MaxLogit    | 93.54 | 35.99 | 33.18  |
+| GN ODIN        | 65.68 |  6.10 | 96.09  |
+| GN Energy      | 93.79 | 36.53 | 32.81  |
+| GN Entropy     | 92.11 | 13.70 | 34.11  |
 
 Test + Cetran (3,605 frames; PQ 46.19, mIoU 47.94; 1.261B ID / 23.6M OOD points
 = 1.84% OOD):
@@ -274,6 +294,16 @@ Test + Cetran (3,605 frames; PQ 46.19, mIoU 47.94; 1.261B ID / 23.6M OOD points
 | ODIN     | 89.36 | 27.19 | 55.64  |
 | Energy   | 92.88 | 35.55 | 37.94  |
 | Entropy  | 89.38 | 26.12 | 44.90  |
+| Group MSP      | 89.97 | 16.30 | 40.66  |
+| Group MaxLogit | 92.67 | 35.90 | 38.12  |
+| Group ODIN     | 24.43 |  1.11 | 96.08  |
+| Group Energy   | 92.88 | 36.03 | 37.95  |
+| Group Entropy  | 90.45 | 21.85 | 40.78  |
+| GN MSP         | 92.07 | 19.81 | 39.89  |
+| GN MaxLogit    | 93.75 | 36.28 | 30.36  |
+| GN ODIN        | 70.95 |  8.60 | 94.82  |
+| GN Energy      | 93.94 | 36.31 | 29.96  |
+| GN Entropy     | 91.75 | 14.49 | 39.89  |
 
 Energy and MaxLogit are the strongest on both splits (as on SemanticKITTI); ODIN's
 T=1000 flattening hurts noticeably more here than on SemanticKITTI. Smoke test: 5-frame
@@ -287,3 +317,20 @@ as in `trash/Done/eval_ood_from_logits.py`). Emitted as `ood_entropy` and includ
 come from re-running the three evals on 2026-08-21 (the other rows reproduced exactly).
 Note: one eval needs ~17 GB (SemanticKITTI) to ~25 GB (DSO) of GPU memory; it OOMs in
 spconv (`cuda execution failed with error 2`) when less is free.
+
+## 2026-08-21 — Group / Group-Normalised OOD scores (GroupPaper)
+
+Hierarchy-aware variants of the five scores from `papers/RelatedPapers/GroupPaper.pdf`
+(Eq. 2–8), ported from `trash/Done/eval_ood_from_logits.py` with our sign convention (`−max`):
+Group sums softmax mass per semantic group (logits keep max / logsumexp within the group),
+then max over groups; GN chance-corrects with `[P_g − K_g/C]_+` (probabilities) or `− log K_g`
+(logits). Six groups (vehicle / human / ground / construction / nature / object) = the paper's
+Table 2 for SemanticKITTI and the script's `dso24` preset for DSO, set via
+`ood_cfg.class_groups` in both OOD configs; `_OODPointMetric` now evaluates every `ood_*` key
+the model emits. The Group/GN rows in the three tables above come from the 2026-08-21 re-runs
+(flat rows reproduced exactly). Reading: Group MSP/Entropy help on all splits (SemanticKITTI
+MSP FPR@95 43.45 → 36.89); Group MaxLogit ≡ MaxLogit by construction; Group ODIN collapses
+(at T=1000 the group sums are dominated by group size); GN hurts the probability scores on
+SemanticKITTI but is the best family on DSO (GN Energy 93.8–93.9 AUROC, FPR@95 ≈ 30–33).
+`_PanopticSegMetric` now stores only its two masks — it used to copy every `pred_pts_seg` key,
+doubling the evaluator's RAM with 15 scores (the first Cetran re-run was OOM-killed at 251 GB).
