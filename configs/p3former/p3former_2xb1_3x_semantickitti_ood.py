@@ -1,7 +1,7 @@
 _base_ = ['./p3former_2xb1_3x_semantickitti.py']
 
-# Post-hoc point-level OOD scoring (MSP / MaxLogit / ODIN / Energy / Entropy)
-# from the auxiliary semantic branch,
+# Post-hoc point-level OOD scoring (MSP / MaxLogit / ODIN / Energy / Entropy
+# + group and group-normalised variants) from the auxiliary semantic branch,
 # for the 2-GPU batch-1 SemanticKITTI model. Identical evaluation setup to
 # p3former_8xb2_3x_semantickitti_ood.py; protocol and hyperparameters:
 # docs/superpowers/specs/2026-08-12-ood-baselines-design.md
@@ -10,7 +10,17 @@ model = dict(
         ood_cfg=dict(
             num_ood_logits=19,
             odin_temperature=1000.0,
-            energy_temperature=1.0)))
+            energy_temperature=1.0,
+            # Semantic hierarchy for the group / group-normalised scores
+            # (papers/RelatedPapers/GroupPaper.pdf, Table 2), train ids.
+            class_groups=[
+                [0, 1, 2, 3, 4],  # vehicle: car, bicycle, motorcycle, truck, other-vehicle
+                [5, 6, 7],  # human: person, bicyclist, motorcyclist
+                [8, 9, 10, 11],  # ground: road, parking, sidewalk, other-ground
+                [12, 13],  # construction: building, fence
+                [14, 15, 16],  # nature: vegetation, trunk, terrain
+                [17, 18],  # object: pole, traffic-sign
+            ])))
 
 learning_map_inv = {  # copied from the base dataset config
     0: 10,

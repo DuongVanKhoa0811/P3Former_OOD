@@ -354,6 +354,16 @@ checkpoint; same 476.8M ID / 9.4M OOD points):
 | ODIN     | 91.46 | 26.94 | 38.33  |
 | Energy   | 90.20 | 33.26 | 44.47  |
 | Entropy  | 88.33 | 17.40 | 40.99  |
+| Group MSP      | 90.65 | 17.26 | 36.16  |
+| Group MaxLogit | 90.03 | 32.50 | 44.38  |
+| Group ODIN     | 27.45 |  1.20 | 94.44  |
+| Group Energy   | 90.39 | 35.17 | 44.37  |
+| Group Entropy  | 91.03 | 22.14 | 35.74  |
+| GN MSP         | 71.81 | 12.70 | 89.49  |
+| GN MaxLogit    | 87.88 | 28.51 | 52.50  |
+| GN ODIN        | 88.47 | 12.27 | 44.20  |
+| GN Energy      | 88.14 | 30.65 | 52.56  |
+| GN Entropy     | 71.86 | 12.49 | 89.49  |
 
-Same picture as the official checkpoint, ~1 point lower across the board; here ODIN has the
-best AUROC and the lowest FPR@95.
+Same picture as the official checkpoint, ~1 point lower across the board; here ODIN is the
+best flat AUROC and Group MSP/Entropy give the lowest FPR@95.
