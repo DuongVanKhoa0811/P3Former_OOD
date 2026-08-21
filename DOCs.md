@@ -160,6 +160,7 @@ Results (val, 4071 scans, official checkpoint; PQ table unchanged at 62.63;
 | MaxLogit | 91.28 | 40.28 | 39.98  |
 | ODIN     | 90.87 | 32.42 | 40.70  |
 | Energy   | 91.59 | 43.71 | 39.98  |
+| Entropy  | 88.57 | 24.70 | 42.91  |
 
 ODIN = temperature-scaled MSP (T=1000, ε=0 per docs/others/baselines/OOD_Baseline.pdf);
 Energy uses T=1. Higher score = more OOD everywhere. Smoke test: add
@@ -261,6 +262,7 @@ Held-out test split (2,625 frames; PQ 46.50, mIoU 48.66; 1.008B ID / 15.9M OOD p
 | MaxLogit | 92.08 | 34.24 | 42.70  |
 | ODIN     | 86.53 | 19.51 | 69.63  |
 | Energy   | 92.36 | 35.47 | 42.55  |
+| Entropy  | 87.84 | 20.23 | 50.40  |
 
 Test + Cetran (3,605 frames; PQ 46.19, mIoU 47.94; 1.261B ID / 23.6M OOD points
 = 1.84% OOD):
@@ -271,6 +273,7 @@ Test + Cetran (3,605 frames; PQ 46.19, mIoU 47.94; 1.261B ID / 23.6M OOD points
 | MaxLogit | 92.67 | 35.90 | 38.12  |
 | ODIN     | 89.36 | 27.19 | 55.64  |
 | Energy   | 92.88 | 35.55 | 37.94  |
+| Entropy  | 89.38 | 26.12 | 44.90  |
 
 Energy and MaxLogit are the strongest on both splits (as on SemanticKITTI); ODIN's
 T=1000 flattening hurts noticeably more here than on SemanticKITTI. Smoke test: 5-frame
@@ -280,7 +283,7 @@ T=1000 flattening hurts noticeably more here than on SemanticKITTI. Smoke test: 
 
 `entropy` = softmax Shannon entropy `−Σ_c p_c log p_c` (natural log, higher = more OOD;
 as in `trash/Done/eval_ood_from_logits.py`). Emitted as `ood_entropy` and included in
-`_OODPointMetric`'s default keys — no config changes. The tables above predate it; re-run
-the three eval commands (2026-08-12 and 2026-08-19 entries) to add the Entropy row — the
-other rows are deterministic. Note: one eval needs ~17 GB GPU memory; it OOMs in spconv
-(`cuda execution failed with error 2`) when less is free.
+`_OODPointMetric`'s default keys — no config changes. The Entropy rows in the tables above
+come from re-running the three evals on 2026-08-21 (the other rows reproduced exactly).
+Note: one eval needs ~17 GB (SemanticKITTI) to ~25 GB (DSO) of GPU memory; it OOMs in
+spconv (`cuda execution failed with error 2`) when less is free.
