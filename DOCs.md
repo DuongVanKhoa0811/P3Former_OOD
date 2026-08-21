@@ -287,3 +287,26 @@ as in `trash/Done/eval_ood_from_logits.py`). Emitted as `ood_entropy` and includ
 come from re-running the three evals on 2026-08-21 (the other rows reproduced exactly).
 Note: one eval needs ~17 GB (SemanticKITTI) to ~25 GB (DSO) of GPU memory; it OOMs in
 spconv (`cuda execution failed with error 2`) when less is free.
+
+## 2026-08-21 — OOD baselines for the 2xb1 SemanticKITTI model
+
+`configs/p3former/p3former_2xb1_3x_semantickitti_ood.py` mirrors the 8xb2 OOD config on top
+of `p3former_2xb1_3x_semantickitti.py` (our own 2-GPU batch-1 run, last epoch):
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python test.py configs/p3former/p3former_2xb1_3x_semantickitti_ood.py work_dirs/p3former_2xb1_3x_semantickitti/epoch_36.pth
+```
+
+Val (4071 scans; PQ 60.32, PQ† 62.99, mIoU 62.49 vs 62.63 / 66.25 / 66.77 for the official
+checkpoint; same 476.8M ID / 9.4M OOD points):
+
+| method   | AUROC | AP    | FPR@95 |
+| -------- | ----- | ----- | ------ |
+| MSP      | 87.25 | 12.79 | 41.39  |
+| MaxLogit | 90.03 | 32.50 | 44.38  |
+| ODIN     | 91.46 | 26.94 | 38.33  |
+| Energy   | 90.20 | 33.26 | 44.47  |
+| Entropy  | 88.33 | 17.40 | 40.99  |
+
+Same picture as the official checkpoint, ~1 point lower across the board; here ODIN has the
+best AUROC and the lowest FPR@95.
