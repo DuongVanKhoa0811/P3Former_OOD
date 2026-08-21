@@ -334,3 +334,36 @@ MSP FPR@95 43.45 → 36.89); Group MaxLogit ≡ MaxLogit by construction; Group 
 SemanticKITTI but is the best family on DSO (GN Energy 93.8–93.9 AUROC, FPR@95 ≈ 30–33).
 `_PanopticSegMetric` now stores only its two masks — it used to copy every `pred_pts_seg` key,
 doubling the evaluator's RAM with 15 scores (the first Cetran re-run was OOM-killed at 251 GB).
+
+## 2026-08-21 — OOD baselines for the 2xb1 SemanticKITTI model
+
+`configs/p3former/p3former_2xb1_3x_semantickitti_ood.py` mirrors the 8xb2 OOD config on top
+of `p3former_2xb1_3x_semantickitti.py` (our own 2-GPU batch-1 run, last epoch):
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python test.py configs/p3former/p3former_2xb1_3x_semantickitti_ood.py work_dirs/p3former_2xb1_3x_semantickitti/epoch_36.pth
+```
+
+Val (4071 scans; PQ 60.32, PQ† 62.99, mIoU 62.49 vs 62.63 / 66.25 / 66.77 for the official
+checkpoint; same 476.8M ID / 9.4M OOD points):
+
+| method   | AUROC | AP    | FPR@95 |
+| -------- | ----- | ----- | ------ |
+| MSP      | 87.25 | 12.79 | 41.39  |
+| MaxLogit | 90.03 | 32.50 | 44.38  |
+| ODIN     | 91.46 | 26.94 | 38.33  |
+| Energy   | 90.20 | 33.26 | 44.47  |
+| Entropy  | 88.33 | 17.40 | 40.99  |
+| Group MSP      | 90.65 | 17.26 | 36.16  |
+| Group MaxLogit | 90.03 | 32.50 | 44.38  |
+| Group ODIN     | 27.45 |  1.20 | 94.44  |
+| Group Energy   | 90.39 | 35.17 | 44.37  |
+| Group Entropy  | 91.03 | 22.14 | 35.74  |
+| GN MSP         | 71.81 | 12.70 | 89.49  |
+| GN MaxLogit    | 87.88 | 28.51 | 52.50  |
+| GN ODIN        | 88.47 | 12.27 | 44.20  |
+| GN Energy      | 88.14 | 30.65 | 52.56  |
+| GN Entropy     | 71.86 | 12.49 | 89.49  |
+
+Same picture as the official checkpoint, ~1 point lower across the board; here ODIN is the
+best flat AUROC and Group MSP/Entropy give the lowest FPR@95.
