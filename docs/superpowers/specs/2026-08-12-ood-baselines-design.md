@@ -44,6 +44,32 @@ All scores are computed from per-voxel class logits `z ∈ R^19` and projected t
 Numerical safety: softmax/logsumexp computed with the max-subtraction trick
 (`torch.softmax` / `torch.logsumexp` already do this).
 
+### Group and Group-Normalised variants (added 2026-08-21)
+
+Hierarchy-aware versions of the five scores, following "Understanding Confidence
+Fragmentation in OOD Detection for 3D LiDAR Semantic Segmentation"
+(`papers/RelatedPapers/GroupPaper.pdf`, Eq. 2–8) as implemented in
+`trash/Done/eval_ood_from_logits.py`; only the score arithmetic is adopted, everything else
+(sign convention `−max`, FPR@95 implementation, ground-truth derivation, storage) stays as
+above. Given a partition of the ID classes into groups `g` with sizes `K_g`
+(`ood_cfg.class_groups`, a list of train-id lists; `None` = flat scores only):
+
+- `P_g = Σ_{c∈g} softmax(z)_c` (and `P_g^T` at the ODIN temperature),
+  `L^ML_g = max_{c∈g} z_c`, `L^E_g = T·log Σ_{c∈g} exp(z_c/T)`.
+- Group: `group_msp = −max_g P_g`, `group_odin = −max_g P_g^T`,
+  `group_maxlogit = −max_g L^ML_g` (= MaxLogit for a partition),
+  `group_energy = −max_g L^E_g`, `group_entropy = −Σ_g P_g log P_g` (P clipped at 1e-12).
+- Group Normalisation: `Q_g = [P_g − K_g/C]_+` (C = number of ID logits), likewise `Q_g^T`;
+  `gn_msp = −max_g Q_g`, `gn_odin = −max_g Q_g^T`, `gn_maxlogit = −max_g (L^ML_g − log K_g)`,
+  `gn_energy = −max_g (L^E_g − T·log K_g)`, `gn_entropy = −Σ_g (Q_g+ε) log(Q_g+ε)`, ε = 1e-12
+  (the script's epsilon placement; the paper's Eq. 7 writes `Q_g log(Q_g+ε)`, a ≤1e-10
+  difference).
+- Keys: `group_{msp,maxlogit,odin,energy,entropy}`, `gn_{…}`; `_OODPointMetric` evaluates
+  every `ood_*` key the model emits (default `score_keys=None`), canonical order
+  `ALL_SCORE_KEYS`.
+- Hierarchies: SemanticKITTI = the paper's Table 2 (vehicle / human / ground / construction /
+  nature / object); DSO = the script's `dso24` preset (same six groups over the 24 DSO ids).
+
 ### Logit source
 
 The head's auxiliary semantic branch (`sem_preds` in `_P3FormerHead.forward`, produced by
