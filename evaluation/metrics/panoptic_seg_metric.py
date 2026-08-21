@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # Modified from mmdetection3d.
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Sequence
 
 from mmengine.logging import MMLogger
 import mmengine
@@ -44,6 +44,25 @@ class _PanopticSegMetric(SegMetric):
 
     # TODO modify format_result for panoptic segmentation evaluation, \
     # different datasets have different needs.
+
+    def process(self, data_batch: dict, data_samples: Sequence[dict]) -> None:
+        """Store the ground truth and only the two predicted masks.
+
+        mmdet3d's ``SegMetric.process`` copies every ``pred_pts_seg`` key;
+        with the OOD scores attached (up to 15 float32 arrays per point)
+        that would double the evaluator's memory for arrays this metric
+        never reads.
+        """
+        for data_sample in data_samples:
+            pred_3d = data_sample['pred_pts_seg']
+            eval_ann_info = data_sample['eval_ann_info']
+            cpu_pred_3d = dict()
+            for key in ('pts_semantic_mask', 'pts_instance_mask'):
+                value = pred_3d[key]
+                if hasattr(value, 'to'):
+                    value = value.to('cpu').numpy()
+                cpu_pred_3d[key] = value
+            self.results.append((eval_ann_info, cpu_pred_3d))
 
     def compute_metrics(self, results: list) -> Dict[str, float]:
         """Compute the metrics from processed results.
