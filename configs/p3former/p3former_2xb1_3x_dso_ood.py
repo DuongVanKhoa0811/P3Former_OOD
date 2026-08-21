@@ -11,7 +11,18 @@ model = dict(
         ood_cfg=dict(
             num_ood_logits=24,  # drop the ignore channel (24) of the 25-way head
             odin_temperature=1000.0,
-            energy_temperature=1.0)))
+            energy_temperature=1.0,
+            # Six-group semantic hierarchy for the group / group-normalised
+            # scores (GroupPaper.pdf Table 2 transferred to the 24 DSO train
+            # ids, as in trash/Done/eval_ood_from_logits.py 'dso24').
+            class_groups=[
+                [0, 1, 2, 3, 4],  # vehicle: car, bicycle, motorcycle, truck, bus
+                [5, 6],  # human: person, rider
+                [9, 10, 11, 19],  # ground: paved-road, unpaved-road, sidewalk, drain
+                [12, 13, 14, 15, 16, 17],  # construction: building, window, perimeter-barrier, other-barrier, overhead-bridge, gate
+                [20, 21, 22],  # nature: terrain, trunks, vegetation
+                [7, 8, 18, 23],  # object: traffic-sign, traffic-cone, pole-like-object, obscurant
+            ])))
 
 learning_map_inv = {  # copied from the DSO base dataset config
     0: 3,  # car

@@ -84,12 +84,41 @@ def test_missing_score_key_message():
     print('PASS test_missing_score_key_message')
 
 
-def test_default_score_keys():
-    # The configs rely on the default: it must cover every emitted score.
+def test_default_score_keys_are_discovered():
+    # The configs rely on the default: every ood_* key the model emits is
+    # evaluated, in the canonical ALL_SCORE_KEYS order (unknown keys last),
+    # fixed from the first processed sample.
     from p3former.utils.ood_scores import OOD_SCORE_KEYS
-    assert _OODPointMetric().score_keys == OOD_SCORE_KEYS == (
+    metric = _OODPointMetric()
+    assert metric.score_keys is None
+    s = [0.0, 0.1, 5.0, 6.0, 9.0, 9.0, 0.2, 7.0]
+    metric.process({}, [_sample({key: s for key in OOD_SCORE_KEYS})])
+    assert metric.score_keys == OOD_SCORE_KEYS == (
         'msp', 'maxlogit', 'odin', 'energy', 'entropy')
-    print('PASS test_default_score_keys')
+    # Group keys are picked up in canonical order; unknown ones are appended.
+    metric = _OODPointMetric()
+    metric.process({}, [_sample({'gn_energy': s, 'zz_custom': s, 'msp': s,
+                                 'group_msp': s, 'entropy': s})])
+    assert metric.score_keys == ('msp', 'entropy', 'group_msp', 'gn_energy',
+                                 'zz_custom'), metric.score_keys
+    results = metric.compute_metrics(metric.results)
+    assert results['zz_custom_AUROC'] == 100.0
+    assert set(results) == {f'{k}_{m}' for k in metric.score_keys
+                            for m in ('AUROC', 'AP', 'FPR95')}
+    # With no ood_* key at all the error points at ood_cfg.
+    metric = _OODPointMetric()
+    try:
+        metric.process({}, [{
+            'pred_pts_seg': {'pts_semantic_mask': np.zeros(8)},
+            'eval_ann_info': {
+                'pts_instance_mask': RAW_PANOPTIC.copy(),
+                'pts_semantic_mask': MAPPED.copy(),
+            },
+        }])
+        raise AssertionError('expected KeyError')
+    except KeyError as e:
+        assert 'ood_cfg' in str(e), e
+    print('PASS test_default_score_keys_are_discovered')
 
 
 def test_length_mismatch_rejected():
@@ -106,6 +135,6 @@ if __name__ == '__main__':
     test_gt_derivation_and_perfect_scores()
     test_accumulates_across_scans()
     test_missing_score_key_message()
-    test_default_score_keys()
+    test_default_score_keys_are_discovered()
     test_length_mismatch_rejected()
     print('ALL TESTS PASSED')
