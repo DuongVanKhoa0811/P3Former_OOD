@@ -367,3 +367,30 @@ checkpoint; same 476.8M ID / 9.4M OOD points):
 
 Same picture as the official checkpoint, ~1 point lower across the board; here ODIN is the
 best flat AUROC and Group MSP/Entropy give the lowest FPR@95.
+
+## 2026-08-25 — Testing different class hierarchies (DSO)
+
+Extra hierarchies are scored in the same inference pass: `class_groups_variants=dict(name=[...])`
+under `ood_cfg` emits `name_group_*` / `name_gn_*` keys. Ablation runs on the Cetran-only
+split (980 frames, ~3% OOD).
+
+1. **Define** — edit `GROUPS` / `SPLIT` / `build_variants()` in
+   `tools/make_dso_hierarchy_variants.py` (defaults: all merges of K = 2..5 base groups, e.g.
+   `m2_go` = ground+object, plus `sp` = every group halved; 57 hierarchies), then
+   `python tools/make_dso_hierarchy_variants.py` → `configs/p3former/hier/*_b{1..5}.py`
+   (12 hierarchies each, Cetran split, OOD metric only, flat + current scores included).
+2. **Run** — one batch at a time (~140 GB RAM, ~10–12 min each):
+   ```bash
+   for i in 1 2 3 4 5; do
+     CUDA_VISIBLE_DEVICES=1 python test.py \
+       configs/p3former/hier/p3former_2xb1_3x_dso_ood_hier_b$i.py \
+       work_dirs/p3former_2xb1_3x_dso/epoch_36.pth \
+       --work-dir work_dirs/p3former_2xb1_3x_dso_ood_hier/b$i
+   done
+   ```
+3. **Rank** — `python tools/summarize_hierarchy_ablation.py --family group|gn [--exclude odin,entropy] work_dirs/p3former_2xb1_3x_dso_ood_hier/b*/*/*.log`
+   prints per hierarchy Δ = hierarchy − flat (dAUROC/dAP/dFPR@95) per baseline, their mean,
+   and `improvement` = mean dAUROC + mean dAP − mean dFPR@95 (sort key). MaxLogit is always
+   excluded (its group/GN formulation is wrong).
+4. **Confirm** the winner on test / test+Cetran: copy its groups into `class_groups` of
+   `p3former_2xb1_3x_dso_ood.py` and run the 2026-08-19 commands.

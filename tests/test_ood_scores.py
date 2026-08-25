@@ -304,6 +304,30 @@ def test_point_projection_with_groups():
     print('PASS test_point_projection_with_groups')
 
 
+def test_class_groups_variants():
+    # Named alternative hierarchies ride along with prefixed keys and must
+    # equal a direct class_groups computation with the same hierarchy.
+    logits = torch.randn(9, 19)
+    variants = {
+        'm2': [[0, 1, 2, 3, 4, 5, 6, 7], [8, 9, 10, 11]],
+        'c2': [[12, 13], [14, 15, 16]],  # partial coverage is allowed
+    }
+    scores = compute_ood_scores(logits, class_groups=SK_GROUPS,
+                                class_groups_variants=variants)
+    for name, groups in variants.items():
+        direct = compute_ood_scores(logits, class_groups=groups)
+        for key in GROUP_SCORE_KEYS + GN_SCORE_KEYS:
+            assert torch.allclose(scores[f'{name}_{key}'], direct[key],
+                                  atol=1e-6), (name, key)
+    # Base keys unchanged, each variant adds its ten prefixed keys.
+    assert len(scores) == len(ALL_SCORE_KEYS) + 10 * len(variants)
+    pts = point_ood_scores(logits, torch.tensor([0, 3, 5]),
+                           class_groups_variants=variants)
+    assert 'm2_gn_energy' in pts and pts['m2_gn_energy'].shape == (3, )
+    assert pts['m2_gn_energy'].dtype == np.float32
+    print('PASS test_class_groups_variants')
+
+
 if __name__ == '__main__':
     test_score_keys_and_shapes()
     test_known_values_two_classes()
@@ -320,4 +344,5 @@ if __name__ == '__main__':
     test_group_energy_temperature()
     test_invalid_class_groups_rejected()
     test_point_projection_with_groups()
+    test_class_groups_variants()
     print('ALL TESTS PASSED')
