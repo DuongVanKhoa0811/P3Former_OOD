@@ -730,7 +730,9 @@ class _P3FormerHead(nn.Module):
                             'odin_temperature', 1000.0),
                         energy_temperature=self.ood_cfg.get(
                             'energy_temperature', 1.0),
-                        class_groups=self.ood_cfg.get('class_groups')))
+                        class_groups=self.ood_cfg.get('class_groups'),
+                        class_groups_variants=self.ood_cfg.get(
+                            'class_groups_variants')))
 
         return pts_semantic_preds, pts_instance_preds, pts_ood_scores
 

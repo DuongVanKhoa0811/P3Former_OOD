@@ -60,7 +60,9 @@ def validate_class_groups(class_groups: Sequence[Sequence[int]],
 def compute_ood_scores(logits: torch.Tensor,
                        odin_temperature: float = 1000.0,
                        energy_temperature: float = 1.0,
-                       class_groups: Optional[Sequence[Sequence[int]]] = None
+                       class_groups: Optional[Sequence[Sequence[int]]] = None,
+                       class_groups_variants: Optional[Dict[str, Sequence[
+                           Sequence[int]]]] = None
                        ) -> Dict[str, torch.Tensor]:
     """Compute all OOD scores from classification logits.
 
@@ -71,6 +73,10 @@ def compute_ood_scores(logits: torch.Tensor,
         class_groups: optional partition of the class indices into semantic
             groups (list of index lists). When given, the ``group_*`` and
             ``gn_*`` scores are added.
+        class_groups_variants: optional named alternative hierarchies
+            (name -> list of index lists). Each adds the same ten
+            hierarchy-aware scores under keys ``{name}_group_*`` /
+            ``{name}_gn_*``, all from the same logits.
 
     Returns:
         dict with keys ``OOD_SCORE_KEYS`` (plus ``GROUP_SCORE_KEYS`` and
@@ -95,6 +101,12 @@ def compute_ood_scores(logits: torch.Tensor,
         scores.update(
             _hierarchy_scores(logits, probs, probs_T, class_groups,
                               energy_temperature))
+    if class_groups_variants is not None:
+        for name, groups in class_groups_variants.items():
+            variant = _hierarchy_scores(logits, probs, probs_T, groups,
+                                        energy_temperature)
+            scores.update(
+                {f'{name}_{key}': value for key, value in variant.items()})
     return scores
 
 
@@ -146,7 +158,9 @@ def point_ood_scores(voxel_logits: torch.Tensor,
                      point2voxel_map: torch.Tensor,
                      odin_temperature: float = 1000.0,
                      energy_temperature: float = 1.0,
-                     class_groups: Optional[Sequence[Sequence[int]]] = None
+                     class_groups: Optional[Sequence[Sequence[int]]] = None,
+                     class_groups_variants: Optional[Dict[str, Sequence[
+                         Sequence[int]]]] = None
                      ) -> Dict[str, np.ndarray]:
     """Compute voxel OOD scores and project them to points.
 
@@ -162,7 +176,8 @@ def point_ood_scores(voxel_logits: torch.Tensor,
         numpy array [N].
     """
     voxel_scores = compute_ood_scores(voxel_logits, odin_temperature,
-                                      energy_temperature, class_groups)
+                                      energy_temperature, class_groups,
+                                      class_groups_variants)
     p2v = point2voxel_map.long()
     return {
         key: value[p2v].detach().cpu().numpy().astype(np.float32)
