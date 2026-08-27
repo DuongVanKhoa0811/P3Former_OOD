@@ -374,14 +374,16 @@ Extra hierarchies are scored in the same inference pass: `class_groups_variants=
 under `ood_cfg` emits `name_group_*` / `name_gn_*` keys. Ablation runs on the Cetran-only
 split (980 frames, ~3% OOD).
 
-1. **Define** — edit `GROUPS` / `SPLIT` / `build_variants()` in
-   `tools/make_dso_hierarchy_variants.py` (defaults: all merges of K = 2..5 base groups, e.g.
-   `m2_go` = ground+object, plus `sp` = every group halved; 57 hierarchies), then
-   `python tools/make_dso_hierarchy_variants.py` → `configs/p3former/hier/*_b{1..5}.py`
+1. **Define** — `tools/make_dso_hierarchy_variants.py` enumerates every set partition of the
+   six base groups in `GROUPS` (202 partitions with 2–6 groups, checked against the Stirling
+   numbers 31/90/65/15/1; named by block initials, e.g. `p_vh_gcno` = {vehicle+human} |
+   {ground+construction+nature+object}, `p_v_h_g_c_n_o` = the current hierarchy) plus `sp`
+   (every group halved) — 203 hierarchies. Edit `GROUPS` / `SPLIT` to change the base, then
+   `python tools/make_dso_hierarchy_variants.py` → `configs/p3former/hier/*_b{1..17}.py`
    (12 hierarchies each, Cetran split, OOD metric only, flat + current scores included).
 2. **Run** — one batch at a time (~140 GB RAM, ~10–12 min each):
    ```bash
-   for i in 1 2 3 4 5; do
+   for i in $(seq 1 17); do
      CUDA_VISIBLE_DEVICES=1 python test.py \
        configs/p3former/hier/p3former_2xb1_3x_dso_ood_hier_b$i.py \
        work_dirs/p3former_2xb1_3x_dso/epoch_36.pth \

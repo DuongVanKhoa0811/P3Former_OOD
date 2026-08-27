@@ -199,6 +199,15 @@ def plot_top(summary, fam, order, baselines, out, title=None):
     ax.hist(values, bins=20, color='#dddddd', edgecolor=ink, linewidth=1.0,
             zorder=2)
     ax.axvline(0, color='red', linewidth=1.5, zorder=3)
+    # Reference hierarchies: the current six-group one and the split one.
+    for name, color, style in (('current', 'tab:blue', '--'),
+                               ('sp', 'tab:green', ':')):
+        if name in summary and fam in summary[name]:
+            value = _improvement(summary[name][fam]['mean'])
+            ax.axvline(value, color=color, linestyle=style, linewidth=1.8,
+                       zorder=3, label=f'{name} ({value:+.2f})')
+    if ax.get_legend_handles_labels()[0]:
+        ax.legend(loc='upper left', fontsize=9, frameon=False)
     ax.set_xlabel('improvement = mean dAUROC + mean dAP - mean dFPR@95',
                   fontsize=10)
     ax.set_ylabel('# hierarchies', fontsize=10)
