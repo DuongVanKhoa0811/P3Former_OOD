@@ -2,11 +2,15 @@
 """Generate the DSO hierarchy-ablation configs (Cetran-only split).
 
 Starting from the six-group DSO hierarchy (vehicle v, human h, ground g,
-construction c, nature n, object o) every hierarchy obtained by merging K of
-the six groups into one (K = 2..5, all C(6, K) combinations: 15 + 20 + 15 +
-6 = 56) is scored, plus one random halving of every group (``sp``, the
-numpy RandomState(0) draw of 2026-08-24, kept literal here for
-reproducibility).
+construction c, nature n, object o) every set partition of the six groups
+is scored: all 203 partitions (Bell number B(6); by number of groups
+1 / 31 / 90 / 65 / 15 / 1) minus the single-group one, i.e. 202
+hierarchies with 2..6 groups. Each is named ``p_<block>_<block>...`` with
+the blocks written as group initials in canonical order (e.g. ``p_vh_gcno``
+= {vehicle+human} | {ground+construction+nature+object}); the 6-block
+partition ``p_v_h_g_c_n_o`` is the current hierarchy itself and doubles as
+a consistency check. One extra hierarchy, ``sp``, halves every base group at
+random (numpy RandomState(0) draw of 2026-08-24, kept literal here).
 
 Each hierarchy adds ten score columns (group_* / gn_*) per point; the
 evaluator keeps every column in RAM, so the variants are split into batches
@@ -15,15 +19,14 @@ of ``--batch-size`` hierarchies, one config per batch:
     configs/p3former/hier/p3former_2xb1_3x_dso_ood_hier_b<i>.py
 
 Run from the repo root:
-    python tools/make_dso_hierarchy_variants.py
-    for i in 1 2 3 4 5; do CUDA_VISIBLE_DEVICES=1 python test.py \\
+    python tools/make_dso_hierarchy_variants.py            # 203 hierarchies, 17 batches of 12
+    for i in $(seq 1 17); do CUDA_VISIBLE_DEVICES=1 python test.py \\
         configs/p3former/hier/p3former_2xb1_3x_dso_ood_hier_b$i.py \\
         work_dirs/p3former_2xb1_3x_dso/epoch_36.pth \\
         --work-dir work_dirs/p3former_2xb1_3x_dso_ood_hier/b$i; done
 then summarise the logs with tools/summarize_hierarchy_ablation.py.
 """
 import argparse
-import itertools
 import os
 from collections import OrderedDict
 
@@ -35,6 +38,10 @@ GROUPS = OrderedDict([
     ('n', ('nature', [20, 21, 22])),
     ('o', ('object', [7, 8, 18, 23])),
 ])
+
+# Stirling numbers of the second kind S(6, k), k = 1..6: the expected number
+# of partitions with k blocks (they sum to the Bell number 203).
+STIRLING_6 = {1: 1, 2: 31, 3: 90, 4: 65, 5: 15, 6: 1}
 
 # numpy RandomState(0) draws of 2026-08-24 (see docstring).
 SPLIT = [
@@ -52,9 +59,10 @@ HEADER = '''_base_ = ['../p3former_2xb1_3x_dso_ood.py']
 # Hierarchy ablation batch {batch}/{num_batches} on the Cetran-only split:
 # the hierarchies below are scored in the same inference pass as the
 # current six-group hierarchy (keys prefixed with the variant name, e.g.
-# m2_go_group_msp = ground+object merged). Group initials: v vehicle,
-# h human, g ground, c construction, n nature, o object. The PQ evaluator
-# is dropped (panoptic quality does not depend on the hierarchy).
+# p_vh_gcno_group_msp = {{vehicle+human}} | {{ground+...+object}}). Group
+# initials: v vehicle, h human, g ground, c construction, n nature,
+# o object. The PQ evaluator is dropped (panoptic quality does not depend
+# on the hierarchy).
 model = dict(
     decode_head=dict(
         ood_cfg=dict(
@@ -78,18 +86,64 @@ test_evaluator = val_evaluator
 '''
 
 
-def build_variants():
-    """Return OrderedDict name -> (description, [(group label, ids), ...])."""
+def set_partitions(items):
+    """Yield every set partition of ``items`` as a list of blocks."""
+    if not items:
+        yield []
+        return
+    first, rest = items[0], items[1:]
+    for smaller in set_partitions(rest):
+        yield [[first]] + smaller  # first in a block of its own
+        for i in range(len(smaller)):  # or joined to an existing block
+            yield smaller[:i] + [[first] + smaller[i]] + smaller[i + 1:]
+
+
+def canonical(blocks):
+    """Blocks as initial-strings: initials in GROUPS order inside a block,
+    blocks ordered by their first initial (group order does not matter)."""
+    order = {initial: i for i, initial in enumerate(GROUPS)}
+    blocks = [''.join(sorted(block, key=order.get)) for block in blocks]
+    return sorted(blocks, key=lambda block: order[block[0]])
+
+
+def partition_variant(blocks):
+    """(name, description, [(label, ids), ...]) for canonical ``blocks``."""
+    groups = [('+'.join(GROUPS[i][0] for i in block),
+               sum((GROUPS[i][1] for i in block), [])) for block in blocks]
+    desc = f'{len(blocks)} groups: ' + ' | '.join(blocks)
+    if len(blocks) == len(GROUPS):
+        desc += ' (= current hierarchy)'
+    return 'p_' + '_'.join(blocks), desc, groups
+
+
+def partition_variants():
+    """All partitions with 2..6 blocks, ordered by block count; counts are
+    checked against the Stirling numbers (203 partitions in total)."""
+    by_count = {k: [] for k in STIRLING_6}
+    seen = set()
+    for blocks in set_partitions(list(GROUPS)):
+        blocks = tuple(canonical(blocks))
+        if blocks in seen:
+            raise RuntimeError(f'duplicate partition {blocks}')
+        seen.add(blocks)
+        by_count[len(blocks)].append(blocks)
+    for k, expected in STIRLING_6.items():
+        if len(by_count[k]) != expected:
+            raise RuntimeError(f'{len(by_count[k])} partitions with {k} '
+                               f'blocks, expected {expected}')
     variants = OrderedDict()
-    initials = list(GROUPS)
-    for k in (2, 3, 4, 5):
-        for combo in itertools.combinations(initials, k):
-            merged = sum((GROUPS[i][1] for i in combo), [])
-            label = '+'.join(GROUPS[i][0] for i in combo)
-            groups = [(label, merged)]
-            groups += [GROUPS[i] for i in initials if i not in combo]
-            variants[f'm{k}_{"".join(combo)}'] = (f'merge {k}: {label}',
-                                                 groups)
+    for k in sorted(by_count):
+        if k == 1:
+            continue  # the single-group partition carries no information
+        for blocks in sorted(by_count[k]):
+            name, desc, groups = partition_variant(list(blocks))
+            variants[name] = (desc, groups)
+    return variants
+
+
+def build_variants():
+    """All partitions (2..6 blocks) followed by the split hierarchy."""
+    variants = partition_variants()
     variants['sp'] = ('split each group in half', SPLIT)
     return variants
 
@@ -114,11 +168,11 @@ def main():
     ap.add_argument('--out-dir', default='configs/p3former/hier')
     args = ap.parse_args()
 
+    os.makedirs(args.out_dir, exist_ok=True)
     variants = build_variants()
     names = list(variants)
     batches = [names[i:i + args.batch_size]
                for i in range(0, len(names), args.batch_size)]
-    os.makedirs(args.out_dir, exist_ok=True)
     for b, batch_names in enumerate(batches, start=1):
         path = os.path.join(args.out_dir,
                             f'p3former_2xb1_3x_dso_ood_hier_b{b}.py')
