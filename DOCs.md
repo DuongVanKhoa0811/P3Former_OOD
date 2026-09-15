@@ -141,6 +141,8 @@ Notes:
 - The two DSO evals contend with whatever is training on GPU 1; run them after the
 SemanticKITTI 1xb2 run finishes (or on GPU 0 when it is free — eval is light).
 
+
+
 ## 2026-08-12 — Point-level OOD baselines (MSP / MaxLogit / ODIN / Energy)
 
 Post-hoc OOD scoring from the aux semantic branch; OOD classes = raw 52
@@ -154,16 +156,17 @@ CUDA_VISIBLE_DEVICES=0 python test.py configs/p3former/p3former_8xb2_3x_semantic
 Results (val, 4071 scans, official checkpoint; PQ table unchanged at 62.63;
 476.8M ID / 9.4M OOD points = 1.94% OOD):
 
-| method   | AUROC | AP    | FPR@95 |
-| -------- | ----- | ----- | ------ |
-| MSP      | 87.48 | 16.29 | 43.45  |
-| MaxLogit | 91.28 | 40.28 | 39.98  |
-| ODIN     | 90.87 | 32.42 | 40.70  |
-| Energy   | 91.59 | 43.71 | 39.98  |
-| Entropy  | 88.57 | 24.70 | 42.91  |
+
+| method         | AUROC | AP    | FPR@95 |
+| -------------- | ----- | ----- | ------ |
+| MSP            | 87.48 | 16.29 | 43.45  |
+| MaxLogit       | 91.28 | 40.28 | 39.98  |
+| ODIN           | 90.87 | 32.42 | 40.70  |
+| Energy         | 91.59 | 43.71 | 39.98  |
+| Entropy        | 88.57 | 24.70 | 42.91  |
 | Group MSP      | 90.11 | 17.17 | 36.89  |
 | Group MaxLogit | 91.28 | 40.28 | 39.98  |
-| Group ODIN     | 33.45 |  1.30 | 93.68  |
+| Group ODIN     | 33.45 | 1.30  | 93.68  |
 | Group Energy   | 91.51 | 41.97 | 39.96  |
 | Group Entropy  | 90.55 | 24.32 | 36.50  |
 | GN MSP         | 68.69 | 12.01 | 89.41  |
@@ -172,13 +175,12 @@ Results (val, 4071 scans, official checkpoint; PQ table unchanged at 62.63;
 | GN Energy      | 89.93 | 37.70 | 45.17  |
 | GN Entropy     | 68.68 | 10.88 | 89.41  |
 
+
 ODIN = temperature-scaled MSP (T=1000, ε=0 per docs/others/baselines/OOD_Baseline.pdf);
 Energy uses T=1. Higher score = more OOD everywhere. Smoke test: add
 `--cfg-options test_dataloader.dataset.dataset.ann_file=semantickitti_infos_mini.pkl`
 (20-scan mini pkl generated from the val infos). Unit tests: `tests/test_ood_scores.py`,
 `tests/test_ood_eval.py`, `tests/test_ood_metric.py`.
-
-
 
 ## 2026-08-14 — DSO class-set revision (24 classes)
 
@@ -186,14 +188,14 @@ The DSO class definitions changed (new names; e.g. road→Paved Road, fence→Ot
 net-fence→Perimeter Barrier). Training now covers **24 classes** instead of 16:
 
 - **Things (train 0–8):** car, bicycle, motorcycle, truck, bus, person, rider,
-  **traffic-sign** (raw 19), **traffic-cone** (raw 20) — signs/cones carry real instance ids
-  (~17.6 and ~4.2 per frame) and are now things; the loader keeps their instance bits
-  (`DSO_THING_RAW_IDS` gained 19, 20).
+**traffic-sign** (raw 19), **traffic-cone** (raw 20) — signs/cones carry real instance ids
+(~17.6 and ~4.2 per frame) and are now things; the loader keeps their instance bits
+(`DSO_THING_RAW_IDS` gained 19, 20).
 - **Stuff (train 9–23):** paved-road, unpaved-road, sidewalk, building, window,
-  perimeter-barrier, other-barrier, overhead-bridge, gate, pole-like-object, drain, terrain,
-  trunks, vegetation, obscurant (ascending raw id).
+perimeter-barrier, other-barrier, overhead-bridge, gate, pole-like-object, drain, terrain,
+trunks, vegetation, obscurant (ascending raw id).
 - **Ignored (→ 24):** Noise (0), **Stop (17)** and **Others (28)** — reserved as future OOD
-  classes — Sky (29) and Water Body (30) — 2D-only — Unlabelled (255).
+classes — Sky (29) and Water Body (30) — 2D-only — Unlabelled (255).
 
 Head is now 25-way (`num_classes=25`, `cls_channels=(256,256,25)`); pkls/splits unchanged.
 **Old 16-class checkpoints are incompatible — DSO must be retrained** (same commands as
@@ -212,6 +214,7 @@ batch 2, ~half the per-GPU activations):
 ```bash
 CUDA_VISIBLE_DEVICES=0,1 bash dist_train.sh configs/p3former/p3former_2xb1_3x_dso.py 2
 ```
+
 
 
 ## 2026-08-15 — 2xb1 SemanticKITTI config; DSO 24-class test commands
@@ -250,6 +253,8 @@ Evaluate the 24-class model on them with the usual override, e.g.:
 CUDA_VISIBLE_DEVICES=1 python test.py configs/p3former/p3former_2xb1_3x_dso.py work_dirs/p3former_2xb1_3x_dso/epoch_36.pth --cfg-options test_dataloader.dataset.dataset.ann_file=dso_infos_test_cetran.pkl
 ```
 
+
+
 ## 2026-08-19 — Point-level OOD baselines on DSO (MSP / MaxLogit / ODIN / Energy)
 
 Same post-hoc protocol as the 2026-08-12 SemanticKITTI entry, ported to the 24-class DSO
@@ -266,44 +271,48 @@ CUDA_VISIBLE_DEVICES=1 python test.py configs/p3former/p3former_2xb1_3x_dso_ood.
 Held-out test split (2,625 frames; PQ 46.50, mIoU 48.66; 1.008B ID / 15.9M OOD points
 = 1.55% OOD):
 
-| method   | AUROC | AP    | FPR@95 |
-| -------- | ----- | ----- | ------ |
-| MSP      | 86.26 | 13.76 | 51.15  |
-| MaxLogit | 92.08 | 34.24 | 42.70  |
-| ODIN     | 86.53 | 19.51 | 69.63  |
-| Energy   | 92.36 | 35.47 | 42.55  |
-| Entropy  | 87.84 | 20.23 | 50.40  |
+
+| method         | AUROC | AP    | FPR@95 |
+| -------------- | ----- | ----- | ------ |
+| MSP            | 86.26 | 13.76 | 51.15  |
+| MaxLogit       | 92.08 | 34.24 | 42.70  |
+| ODIN           | 86.53 | 19.51 | 69.63  |
+| Energy         | 92.36 | 35.47 | 42.55  |
+| Entropy        | 87.84 | 20.23 | 50.40  |
 | Group MSP      | 89.33 | 14.50 | 45.99  |
 | Group MaxLogit | 92.08 | 34.24 | 42.70  |
-| Group ODIN     | 22.40 |  0.92 | 96.21  |
+| Group ODIN     | 22.40 | 0.92  | 96.21  |
 | Group Energy   | 92.35 | 35.01 | 42.56  |
 | Group Entropy  | 89.67 | 18.91 | 46.41  |
 | GN MSP         | 92.35 | 18.08 | 34.11  |
 | GN MaxLogit    | 93.54 | 35.99 | 33.18  |
-| GN ODIN        | 65.68 |  6.10 | 96.09  |
+| GN ODIN        | 65.68 | 6.10  | 96.09  |
 | GN Energy      | 93.79 | 36.53 | 32.81  |
 | GN Entropy     | 92.11 | 13.70 | 34.11  |
+
 
 Test + Cetran (3,605 frames; PQ 46.19, mIoU 47.94; 1.261B ID / 23.6M OOD points
 = 1.84% OOD):
 
-| method   | AUROC | AP    | FPR@95 |
-| -------- | ----- | ----- | ------ |
-| MSP      | 87.76 | 18.06 | 45.76  |
-| MaxLogit | 92.67 | 35.90 | 38.12  |
-| ODIN     | 89.36 | 27.19 | 55.64  |
-| Energy   | 92.88 | 35.55 | 37.94  |
-| Entropy  | 89.38 | 26.12 | 44.90  |
+
+| method         | AUROC | AP    | FPR@95 |
+| -------------- | ----- | ----- | ------ |
+| MSP            | 87.76 | 18.06 | 45.76  |
+| MaxLogit       | 92.67 | 35.90 | 38.12  |
+| ODIN           | 89.36 | 27.19 | 55.64  |
+| Energy         | 92.88 | 35.55 | 37.94  |
+| Entropy        | 89.38 | 26.12 | 44.90  |
 | Group MSP      | 89.97 | 16.30 | 40.66  |
 | Group MaxLogit | 92.67 | 35.90 | 38.12  |
-| Group ODIN     | 24.43 |  1.11 | 96.08  |
+| Group ODIN     | 24.43 | 1.11  | 96.08  |
 | Group Energy   | 92.88 | 36.03 | 37.95  |
 | Group Entropy  | 90.45 | 21.85 | 40.78  |
 | GN MSP         | 92.07 | 19.81 | 39.89  |
 | GN MaxLogit    | 93.75 | 36.28 | 30.36  |
-| GN ODIN        | 70.95 |  8.60 | 94.82  |
+| GN ODIN        | 70.95 | 8.60  | 94.82  |
 | GN Energy      | 93.94 | 36.31 | 29.96  |
 | GN Entropy     | 91.75 | 14.49 | 39.89  |
+
 
 Energy and MaxLogit are the strongest on both splits (as on SemanticKITTI); ODIN's
 T=1000 flattening hurts noticeably more here than on SemanticKITTI. Smoke test: 5-frame
@@ -347,16 +356,17 @@ CUDA_VISIBLE_DEVICES=0 python test.py configs/p3former/p3former_2xb1_3x_semantic
 Val (4071 scans; PQ 60.32, PQ† 62.99, mIoU 62.49 vs 62.63 / 66.25 / 66.77 for the official
 checkpoint; same 476.8M ID / 9.4M OOD points):
 
-| method   | AUROC | AP    | FPR@95 |
-| -------- | ----- | ----- | ------ |
-| MSP      | 87.25 | 12.79 | 41.39  |
-| MaxLogit | 90.03 | 32.50 | 44.38  |
-| ODIN     | 91.46 | 26.94 | 38.33  |
-| Energy   | 90.20 | 33.26 | 44.47  |
-| Entropy  | 88.33 | 17.40 | 40.99  |
+
+| method         | AUROC | AP    | FPR@95 |
+| -------------- | ----- | ----- | ------ |
+| MSP            | 87.25 | 12.79 | 41.39  |
+| MaxLogit       | 90.03 | 32.50 | 44.38  |
+| ODIN           | 91.46 | 26.94 | 38.33  |
+| Energy         | 90.20 | 33.26 | 44.47  |
+| Entropy        | 88.33 | 17.40 | 40.99  |
 | Group MSP      | 90.65 | 17.26 | 36.16  |
 | Group MaxLogit | 90.03 | 32.50 | 44.38  |
-| Group ODIN     | 27.45 |  1.20 | 94.44  |
+| Group ODIN     | 27.45 | 1.20  | 94.44  |
 | Group Energy   | 90.39 | 35.17 | 44.37  |
 | Group Entropy  | 91.03 | 22.14 | 35.74  |
 | GN MSP         | 71.81 | 12.70 | 89.49  |
@@ -364,6 +374,7 @@ checkpoint; same 476.8M ID / 9.4M OOD points):
 | GN ODIN        | 88.47 | 12.27 | 44.20  |
 | GN Energy      | 88.14 | 30.65 | 52.56  |
 | GN Entropy     | 71.86 | 12.49 | 89.49  |
+
 
 Same picture as the official checkpoint, ~1 point lower across the board; here ODIN is the
 best flat AUROC and Group MSP/Entropy give the lowest FPR@95.
@@ -375,24 +386,63 @@ under `ood_cfg` emits `name_group_*` / `name_gn_*` keys. Ablation runs on the Ce
 split (980 frames, ~3% OOD).
 
 1. **Define** — `tools/make_dso_hierarchy_variants.py` enumerates every set partition of the
-   six base groups in `GROUPS` (202 partitions with 2–6 groups, checked against the Stirling
+  six base groups in `GROUPS` (202 partitions with 2–6 groups, checked against the Stirling
    numbers 31/90/65/15/1; named by block initials, e.g. `p_vh_gcno` = {vehicle+human} |
    {ground+construction+nature+object}, `p_v_h_g_c_n_o` = the current hierarchy) plus `sp`
    (every group halved) — 203 hierarchies. Edit `GROUPS` / `SPLIT` to change the base, then
    `python tools/make_dso_hierarchy_variants.py` → `configs/p3former/hier/*_b{1..17}.py`
    (12 hierarchies each, Cetran split, OOD metric only, flat + current scores included).
 2. **Run** — one batch at a time (~140 GB RAM, ~10–12 min each):
-   ```bash
+  ```bash
    for i in $(seq 1 17); do
      CUDA_VISIBLE_DEVICES=1 python test.py \
        configs/p3former/hier/p3former_2xb1_3x_dso_ood_hier_b$i.py \
        work_dirs/p3former_2xb1_3x_dso/epoch_36.pth \
        --work-dir work_dirs/p3former_2xb1_3x_dso_ood_hier/b$i
    done
-   ```
+  ```
 3. **Rank** — `python tools/summarize_hierarchy_ablation.py --family group|gn [--exclude odin,entropy] work_dirs/p3former_2xb1_3x_dso_ood_hier/b*/*/*.log`
-   prints per hierarchy Δ = hierarchy − flat (dAUROC/dAP/dFPR@95) per baseline, their mean,
+  prints per hierarchy Δ = hierarchy − flat (dAUROC/dAP/dFPR@95) per baseline, their mean,
    and `improvement` = mean dAUROC + mean dAP − mean dFPR@95 (sort key). MaxLogit is always
    excluded (its group/GN formulation is wrong).
 4. **Confirm** the winner on test / test+Cetran: copy its groups into `class_groups` of
-   `p3former_2xb1_3x_dso_ood.py` and run the 2026-08-19 commands.
+  `p3former_2xb1_3x_dso_ood.py` and run the 2026-08-19 commands.
+
+
+
+## 2026-09-10 — Why `p_v_hgcno` (vehicle vs rest) beats the current 6-group hierarchy
+
+```bash
+python tools/summarize_hierarchy_ablation.py --family group --exclude odin work_dirs/p3former_2xb1_3x_dso_ood_hier/b*/*/*.log
+```
+
+Full 203-hierarchy ablation on Cetran-only: best is `p_v_hgcno` = {vehicle} | {all other classes}, Group MSP **96.00 AUROC / 47.23 AP / 18.42 FPR@95** vs flat MSP 90.42/28.27/32.32; the current 6-group hierarchy lands *below* flat (improvement −6).
+
+- Group-MSP calls a point ID when one group collects most of its softmax mass, so putting classes in the same group absorbs confusion between them.
+- Principle: the best grouping is determined by **where the model is reliable on the test distribution**, not by the semantic ontology. A group boundary is useful only if the model separates ID points across OOD points. 
+
+Caveat: selected on Cetran-only among 203 candidates — confirm on test / test+Cetran
+(step 4 above) before reporting.
+
+## 2026-09-10 — Recording per-point logits; ID/OOD score-distribution figure
+
+`ood_cfg.save_logits=True` now attaches the per-point float16 semantic logits
+(`pred_pts_seg['sem_logits']`), and `_OODLogitsDumpMetric` writes one npz per frame
+(logits + ood/valid/mapped GT; refuses a non-empty out_dir) — any score or hierarchy is
+then recomputable offline, no further GPU passes. `p3former_2xb1_3x_dso_ood_dump.py` =
+Cetran split + dump (~20 GB) + `_OODPointMetric` incl. the `p_v_hgcno` variant as
+cross-check (PQ dropped):
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python test.py configs/p3former/p3former_2xb1_3x_dso_ood_dump.py work_dirs/p3former_2xb1_3x_dso/epoch_36.pth --work-dir work_dirs/p3former_2xb1_3x_dso_ood_dump
+python tools/plot_ood_score_distributions.py work_dirs/p3former_2xb1_3x_dso_ood_dump/logits
+```
+
+The figure (after trash/ID_OOD_scores.png): one column per hierarchy
+(`--hierarchies`, default current + `p_v_hgcno`), one row per group with the ID vs OOD
+densities of the points that group claims (largest group mass), then the combined score
+row annotated with the recomputed AUROC/AP/FPR@95; x = `1 − max_g P_g` on a log scale
+(monotone in Group-MSP, metrics unchanged; a linear axis collapses into a spike at full
+confidence). Smoke-verified on the 5-frame mini: offline recomputation matches the logged
+`group_msp` / `p_v_hgcno_group_msp` rows to ±0.02 (float16). Unit tests:
+`tests/test_ood_logits_dump.py`.

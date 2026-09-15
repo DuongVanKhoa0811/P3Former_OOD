@@ -722,17 +722,23 @@ class _P3FormerHead(nn.Module):
                 num_logits = self.ood_cfg.get('num_ood_logits',
                                               self.num_classes - 1)
                 voxel_logits = sem_preds[batch_idx][:, :num_logits]
-                pts_ood_scores.append(
-                    point_ood_scores(
-                        voxel_logits,
-                        point2voxel_map,
-                        odin_temperature=self.ood_cfg.get(
-                            'odin_temperature', 1000.0),
-                        energy_temperature=self.ood_cfg.get(
-                            'energy_temperature', 1.0),
-                        class_groups=self.ood_cfg.get('class_groups'),
-                        class_groups_variants=self.ood_cfg.get(
-                            'class_groups_variants')))
+                scores = point_ood_scores(
+                    voxel_logits,
+                    point2voxel_map,
+                    odin_temperature=self.ood_cfg.get(
+                        'odin_temperature', 1000.0),
+                    energy_temperature=self.ood_cfg.get(
+                        'energy_temperature', 1.0),
+                    class_groups=self.ood_cfg.get('class_groups'),
+                    class_groups_variants=self.ood_cfg.get(
+                        'class_groups_variants'))
+                if self.ood_cfg.get('save_logits', False):
+                    # float16 per-point copy of the logits the scores come
+                    # from; postprocess_result stores it as 'sem_logits'
+                    # (for _OODLogitsDumpMetric), not as an 'ood_*' score.
+                    scores['logits'] = voxel_logits[
+                        point2voxel_map].detach().half().cpu().numpy()
+                pts_ood_scores.append(scores)
 
         return pts_semantic_preds, pts_instance_preds, pts_ood_scores
 

@@ -72,7 +72,11 @@ class _P3Former(Cylinder3D):
             seg_data = {'pts_semantic_mask': pts_semantic_preds[i],
                         'pts_instance_mask': pts_instance_preds[i]}
             if pts_ood_scores is not None:
-                for key, value in pts_ood_scores[i].items():
+                scores = dict(pts_ood_scores[i])
+                logits = scores.pop('logits', None)
+                if logits is not None:
+                    seg_data['sem_logits'] = logits
+                for key, value in scores.items():
                     seg_data[f'ood_{key}'] = value
             batch_data_samples[i].set_data(
                 {'pred_pts_seg': PointData(**seg_data)})
