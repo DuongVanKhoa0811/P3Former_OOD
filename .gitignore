@@ -3,4 +3,5 @@ papers/
 work_dirs/
 checkpoint/
 CLAUDE.md
+AGENTS.md
 **/__pycache__/

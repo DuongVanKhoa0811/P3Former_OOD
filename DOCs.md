@@ -446,3 +446,29 @@ row annotated with the recomputed AUROC/AP/FPR@95; x = `1 − max_g P_g` on a lo
 confidence). Smoke-verified on the 5-frame mini: offline recomputation matches the logged
 `group_msp` / `p_v_hgcno_group_msp` rows to ±0.02 (float16). Unit tests:
 `tests/test_ood_logits_dump.py`.
+
+## 2026-09-15 — Random two-group partitions of the 24 classes (offline sweep)
+
+`tools/sweep_bipartitions.py` scores random 2-group partitions of the 24 classes straight
+from the Cetran logits dump (CPU only, no model run): the smaller group's size is drawn
+uniformly from 1..12, then its classes at random; the vehicle-vs-rest split
+(`s0.1.2.3.4` = `p_v_hgcno`) is always included as a cross-check. Names are the train ids of
+the smaller group (`partitions.tsv` lists the class names). Same score formulas as
+`ood_scores.py`, same histogram metric as `_OODPointMetric` (2^16 bins over the empirical
+ranges, float16 logits); `bipartitions.log` is read by `summarize_hierarchy_ablation.py`.
+
+```bash
+python tools/sweep_bipartitions.py work_dirs/p3former_2xb1_3x_dso_ood_dump/logits   # 500 partitions, ~1 h with 8 workers
+python tools/summarize_hierarchy_ablation.py --family group --exclude odin --plot work_dirs/p3former_2xb1_3x_dso_ood_dump/bipartitions/top4_group.png work_dirs/p3former_2xb1_3x_dso_ood_dump/bipartitions/bipartitions.log
+```
+
+Results (500 partitions, seed 0; cross-check `s0.1.2.3.4` Group MSP 95.99/47.21/18.53 offline
+vs 96.00/47.23/18.42 online): 58/500 beat flat (family group, ODIN excluded), none in the
+GN family. Best: `s1.3.17` {bicycle, truck, gate} | rest, improvement +27.66 (Group MSP
+96.79/54.30/17.14), then `s1.3` +27.39 (96.66/53.16/16.40); truck alone (`s3`) already gives
+96.11/52.67/18.41 (+25.12), and vehicle-vs-rest ranks 12th (+21.32). Truck sits in the
+smaller group of 70% of the top 20 (gate 65%, bicycle 45%), while paved-road, sidewalk,
+building, window, the barriers, terrain, trunks and vegetation never do — the winning
+splits isolate the classes the OOD points get confused with and merge every within-ID
+confusion. Caveat: selected on Cetran among 500 random splits — confirm the winners online
+(test / test+Cetran) via `class_groups_variants` before reporting.
