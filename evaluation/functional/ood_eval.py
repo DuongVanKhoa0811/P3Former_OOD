@@ -52,7 +52,21 @@ def binary_ood_metrics(scores_chunks: List[np.ndarray],
         np.clip(b, 0, num_bins - 1, out=b)
         hist_pos += np.bincount(b[y], minlength=num_bins)
         hist_neg += np.bincount(b[~y], minlength=num_bins)
+    return metrics_from_histograms(hist_pos, hist_neg)
 
+
+def metrics_from_histograms(hist_pos: np.ndarray,
+                            hist_neg: np.ndarray) -> Dict[str, float]:
+    """AUROC / AP / FPR@95TPR from per-bin OOD (positive) and ID counts.
+
+    The bins must be equal-width in ascending score order (higher = more
+    OOD); every point in a bin is treated as tied with the others in it.
+    """
+    hist_pos = np.asarray(hist_pos, dtype=np.int64)
+    hist_neg = np.asarray(hist_neg, dtype=np.int64)
+    if hist_pos.shape != hist_neg.shape or hist_pos.ndim != 1:
+        raise ValueError('histograms must be 1-D and of equal length')
+    num_bins = hist_pos.shape[0]
     n_pos = int(hist_pos.sum())
     n_neg = int(hist_neg.sum())
     if n_pos == 0 or n_neg == 0:
