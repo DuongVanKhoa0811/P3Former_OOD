@@ -59,8 +59,9 @@ def metrics_from_histograms(hist_pos: np.ndarray,
                             hist_neg: np.ndarray) -> Dict[str, float]:
     """AUROC / AP / FPR@95TPR from per-bin OOD (positive) and ID counts.
 
-    The bins must be equal-width in ascending score order (higher = more
-    OOD); every point in a bin is treated as tied with the others in it.
+    The bins must be in ascending score order (higher = more OOD) but may
+    have any widths; every point in a bin is treated as tied with the
+    others in it.
     """
     hist_pos = np.asarray(hist_pos, dtype=np.int64)
     hist_neg = np.asarray(hist_neg, dtype=np.int64)
