@@ -659,7 +659,10 @@ def print_ranking(log_path, names, subsets, top, exclude):
         m = rows[f'{reference}_{key}']
         print(f'reference {reference} (vehicle vs rest) {key}: '
               f'{m[0]:.2f}/{m[1]:.2f}/{m[2]:.2f}')
-    for fam in ('group', 'gn'):
+    # Group family only: the offline GN MSP / GN Entropy rows are approximate
+    # (see the module docstring), so no GN ranking is published here and
+    # summarize_hierarchy_ablation.py refuses --family gn on this log.
+    for fam in ('group', ):
         order = sorted((h for h in summary if fam in summary[h]),
                        key=lambda h: -_improvement(summary[h][fam]['mean']))
         n_pos = sum(_improvement(summary[h][fam]['mean']) > 0 for h in order)
@@ -675,6 +678,8 @@ def print_ranking(log_path, names, subsets, top, exclude):
             print(f'| {rank} | {name} | '
                   f'{_improvement(summary[name][fam]["mean"]):+.2f} | '
                   f'{m[0]:.2f}/{m[1]:.2f}/{m[2]:.2f} | {composition[name]} |')
+    print('\n(no GN ranking: the offline GN MSP / GN Entropy rows are '
+          'approximate; rank the GN family from test.py logs)')
 
 
 def main():
