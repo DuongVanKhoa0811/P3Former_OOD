@@ -4,4 +4,5 @@ work_dirs/
 checkpoint/
 CLAUDE.md
 AGENTS.md
+trash/
 **/__pycache__/

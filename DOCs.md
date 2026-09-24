@@ -490,8 +490,9 @@ python tools/sweep_bipartitions.py --backend torch --device cuda:0 $W/logits_tes
 python tools/summarize_hierarchy_ablation.py --family group --exclude odin --plot $W/bipartitions_test_cetran/top4_group.png $W/bipartitions_test_cetran/bipartitions.log
 ```
 
-Results (500 partitions, seed 0; family group, ODIN excluded; GN never beats flat on any
-split; Group MSP as AUROC/AP/FPR@95, improvement = mean dAUROC + mean dAP - mean dFPR@95):
+Results (500 partitions, seed 0; family group, ODIN excluded — the GN family is not ranked
+offline, see 2026-09-24; Group MSP as AUROC/AP/FPR@95, improvement = mean dAUROC + mean dAP
+- mean dFPR@95):
 
 | split (flat MSP; flat Energy) | above flat | best split | its Group MSP | improvement |
 | --- | --- | --- | --- | --- |
@@ -526,3 +527,14 @@ split; Group MSP as AUROC/AP/FPR@95, improvement = mean dAUROC + mean dAP - mean
 
 Caveat: these are selections among 500 random splits on the evaluation data itself — report
 a split only after confirming it online (`class_groups_variants`) on data it was not picked on.
+
+## 2026-09-24 — Offline GN rankings withdrawn (Codex review)
+
+Codex finding on the sweep: its bins are refined only towards the range ends, but GN MSP /
+GN Entropy pile up at an interior value, so their offline metrics are invalid (test
+vehicle-vs-rest GN MSP FPR@95 98.38 offline vs 76.99 online) — yet the tool still ranked
+them and the 2026-09-15 entry concluded "GN never beats flat". Action: that GN conclusion is
+withdrawn; `sweep_bipartitions.py` no longer prints a GN ranking and
+`summarize_hierarchy_ablation.py --family gn` refuses sweep logs (marker line
+`# offline bipartition sweep`). The GN rows stay in the log (GN Energy is exact); rank the
+GN family from test.py logs, or add interior-adaptive bins first.

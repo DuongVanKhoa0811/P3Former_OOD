@@ -22,6 +22,8 @@ as the last column):
     python tools/summarize_hierarchy_ablation.py --family group --exclude odin --plot top4_group.png LOG...
       (--plot draws the --top hierarchies, one panel each: dAUROC / dAP /
       -dFPR@95 bars per baseline plus their mean, caption = improvement)
+``--family gn`` is refused for tools/sweep_bipartitions.py logs: their GN
+MSP / GN Entropy rows are approximate (2026-09-24 note in DOCs.md).
 """
 import argparse
 import glob
@@ -36,6 +38,11 @@ METRICS = ('AUROC', 'AP', 'FPR@95')
 # then max over groups) does not follow the paper's intent, so it is left out
 # of the columns and the means regardless of --exclude.
 ALWAYS_EXCLUDE = ('maxlogit', )
+# Marker line of a tools/sweep_bipartitions.py log. Its GN MSP / GN Entropy
+# rows are approximate (the sweep's histogram bins do not resolve the
+# interior value those scores pile up at; FPR@95 off by up to ~20 points),
+# so the GN family is refused for such logs.
+SWEEP_MARKER = '# offline bipartition sweep'
 
 
 def parse_logs(paths):
@@ -64,6 +71,27 @@ def config_names(paths):
                     names.add(m.group(1))
                     break
     return sorted(names)
+
+
+def offline_sweep_logs(paths):
+    """The logs written by tools/sweep_bipartitions.py (marker line)."""
+    found = []
+    for path in paths:
+        with open(path) as fh:
+            head = [fh.readline() for _ in range(5)]
+        if any(line.startswith(SWEEP_MARKER) for line in head):
+            found.append(path)
+    return found
+
+
+def check_family(family, paths):
+    """Refuse ``--family gn`` on offline sweep logs (see SWEEP_MARKER)."""
+    sweep = offline_sweep_logs(paths)
+    if family == 'gn' and sweep:
+        raise ValueError(
+            '--family gn is not available for offline bipartition sweep logs '
+            f'({", ".join(sweep)}): their GN MSP / GN Entropy rows are '
+            'approximate. Rank the GN family from test.py logs only.')
 
 
 def split_key(method):
@@ -241,6 +269,10 @@ def main():
     args = ap.parse_args()
 
     paths = sorted(p for pattern in args.logs for p in glob.glob(pattern))
+    try:
+        check_family(args.family, paths)
+    except ValueError as err:
+        ap.error(str(err))
     rows = parse_logs(paths)
     exclude = [b for b in BASELINES
                if b in set(args.exclude) | set(ALWAYS_EXCLUDE)]

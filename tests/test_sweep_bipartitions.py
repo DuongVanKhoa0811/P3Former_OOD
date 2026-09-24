@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.join(_REPO_ROOT, 'tools'))
 from evaluation.functional.ood_eval import (binary_ood_metrics,
                                             metrics_from_histograms)
 from p3former.utils.ood_scores import compute_ood_scores
+from summarize_hierarchy_ablation import check_family, offline_sweep_logs
 import sweep_bipartitions as sb
 
 RNG = np.random.RandomState(0)
@@ -172,8 +173,25 @@ def test_sweep_end_to_end():
         assert os.path.exists(os.path.join(out_dir, 'partitions.json'))
 
         # the log is readable by the summariser and reproduces the rows
-        parsed = sb.parse_logs([os.path.join(out_dir, 'bipartitions.log')])
+        log = os.path.join(out_dir, 'bipartitions.log')
+        parsed = sb.parse_logs([log])
         assert len(parsed) == len(rows)
+
+        # ... but the summariser refuses the GN family on it (the offline
+        # GN MSP / GN Entropy rows are approximate); test.py logs are fine
+        assert offline_sweep_logs([log]) == [log]
+        check_family('group', [log])
+        try:
+            check_family('gn', [log])
+        except ValueError as err:
+            assert 'gn' in str(err) and log in str(err)
+        else:
+            raise AssertionError('--family gn accepted on a sweep log')
+        online = os.path.join(tmp, 'online.log')
+        with open(online, 'w') as fh:
+            fh.write("work_dir = 'work_dirs/x'\n    gn_msp |  1.00 |  2.00 |  3.00\n")
+        assert offline_sweep_logs([online]) == []
+        check_family('gn', [online])
         for key, m in rows.items():
             assert parsed[key] == tuple(
                 round(100 * m[k], 2) for k in ('auroc', 'ap', 'fpr95')), key
