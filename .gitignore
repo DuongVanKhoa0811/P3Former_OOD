@@ -2,7 +2,7 @@ data/
 papers/
 work_dirs/
 checkpoint/
-CLAUDE.md
+/CLAUDE.md
 AGENTS.md
 trash/
 **/__pycache__/
