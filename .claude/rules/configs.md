@@ -3,6 +3,8 @@
 Names follow `configs/p3former/p3former_<G>x<B>_3x_<dataset>[_variant].py`, meaning G GPUs × B samples per GPU with the same recipe. The `2xb1` configs are the ones actually trained: the same effective batch as `1xb2` at roughly half the per-GPU memory. Variants:
 
 - `_ood`: adds `ood_cfg` to the head and an `_OODPointMetric` next to the PQ metric.
+- `_ood_dump` (Cetran split) and `_ood_dump_test` (held-out test split): also dump per-point logits through `_OODLogitsDumpMetric`. PQ is dropped.
+- `hier/*_b{1..17}.py`: **generated** by `tools/make_dso_hierarchy_variants.py`. Regenerate them; never edit by hand.
 - `_trainval`: trains on train + val.
 - `_submit`: test-set submission. It loads no annotations and packs `lidar_path` via `_Pack3DDetInputs`. Its evaluator writes SemanticKITTI `.label` files to `semantickitti_submission/` and returns None, so the crash at the end of a submission run is expected. Its test `ann_file` is `semantickitti_infos_mini.pkl`; change it to the real test split for an actual submission.
 
