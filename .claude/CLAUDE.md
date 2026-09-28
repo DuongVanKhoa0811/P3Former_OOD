@@ -10,7 +10,7 @@ Fork of [P3Former](https://github.com/InternRobotics/P3Former) (DETR-style trans
 - **Post-hoc point-level OOD scoring** from the auxiliary semantic branch: MSP, MaxLogit, ODIN, Energy and Entropy, each also in hierarchy-aware Group and Group-Normalised (GN) variants, plus an OOD metric.
 - **Offline analysis tools** that recompute any score or class hierarchy from dumped per-point logits, without running the model.
 
-Work happens on branch `ood-baselines`; `dso-dataset` is merged into it, and `duy/ood-baselines` belongs to a collaborator. `trash/`, `work_dirs/`, `data/`, `checkpoint/`, `papers/`, a root-level `CLAUDE.md` and `AGENTS.md` are gitignored.
+This is branch `ood-baselines/grouping`: the flat baselines of `ood-baselines/flat` plus the Group / GN work; `rules/branches.md` lists the OOD branches and how changes move between them. `trash/`, `work_dirs/`, `data/`, `checkpoint/`, `papers/`, a root-level `CLAUDE.md` and `AGENTS.md` are gitignored.
 
 ## Rules
 
@@ -18,6 +18,7 @@ The detailed instructions are split by topic into `.claude/rules/`. Rules withou
 
 | Rule | Topic |
 | --- | --- |
+| `branches.md` | the OOD branches and how changes move between them |
 | `environment.md` | Python interpreter, pinned stack, run from the repo root |
 | `commands.md` | train, test, multi-GPU and data-preparation commands; outputs and checkpoints |
 | `testing.md` | unit-test suite |
@@ -32,11 +33,11 @@ The detailed instructions are split by topic into `.claude/rules/`. Rules withou
 | `architecture/model.md` | segmentor and P3Former head internals (scoped: `p3former/`) |
 | `architecture/ood-pipeline.md` | how OOD scores flow from the head to the metric |
 
-## Progress log (updated 2026-09-28)
+## Progress log (updated 2026-09-29)
 
 Numbers are AUROC / AP / FPR@95 in %. The dates in brackets are the `DOCs.md` entries with the commands and full tables.
 
-### Completed in the session of 2026-08-12 to 2026-09-28
+### Completed from 2026-08-12 to 2026-09-29
 
 - **Flat OOD baselines**: MSP, MaxLogit, ODIN, Energy and Entropy, computed from the auxiliary semantic branch. They were evaluated on SemanticKITTI val (official and our 2xb1 checkpoint) and on DSO test and test + Cetran [08-12, 08-19, 08-21].
 - **Group and GN scores** (GroupPaper) with the six-group hierarchy [08-21].
@@ -53,6 +54,7 @@ Numbers are AUROC / AP / FPR@95 in %. The dates in brackets are the `DOCs.md` en
   - The project instructions are split into `.claude/rules/`.
   - About 0.9 GB of obsolete runs were removed from `work_dirs/`.
   - Branch `duy/ood-baselines` was created for the collaborator.
+- **Branch split** (2026-09-29): the flat baselines now live on `ood-baselines/flat`, and this branch replays the grouping commits on top of it. The old `ood-baselines` is kept as `archive/ood-baselines-pre-split`.
 
 ### Current status
 
@@ -63,7 +65,7 @@ Numbers are AUROC / AP / FPR@95 in %. The dates in brackets are the `DOCs.md` en
 | Six-group hierarchy ablation | Run on Cetran only. The winner `p_v_hgcno` (96.00 / 47.23 / 18.42, against 90.42 / 28.27 / 32.32 for flat MSP) **does not transfer**. On test its Group MSP is 87.21 / 17.23 / 68.02, against 86.26 / 13.76 / 51.15 for flat MSP. |
 | Bipartition sweep, Group family | Done on all three splits; the outputs are in `work_dirs/p3former_2xb1_3x_dso_ood_dump/bipartitions{,_test,_test_cetran}/`. Best on Cetran: `s1.3.17` {bicycle, truck, gate}, 96.84 / 54.34 / 17.13. Best on test and on test + Cetran: `s16` {overhead-bridge}, 94.04 / 40.45 / 28.52 on test + Cetran, against 87.76 / 18.06 / 45.76 for flat MSP. 32 splits beat flat on both Cetran and test. The Cetran~test rank correlation of the improvement is only +0.61. **None is confirmed online yet.** |
 | Bipartition sweep, GN family | Offline GN MSP and GN Entropy are invalid, because those scores pile up at an interior value that the bins don't resolve. They are not ranked. Fixing this needs interior-adaptive bins or online runs. |
-| Collaborator branch | `origin/duy/ood-baselines` forked at `90af8ea`. It adds `tools/ood_distance.py` (Mahalanobis feature-distance OOD plus a 203-partition sweep, 2026-09-07). It is not merged, and it lacks the five `ood-baselines` commits after `90af8ea`. |
+| Collaborator branch | `origin/duy/ood-baselines` forks from the pre-split history at `90af8ea`, whose counterpart on this branch is `749328a`. It adds `tools/ood_distance.py` (Mahalanobis feature-distance OOD plus a 203-partition sweep, 2026-09-07). It is not merged, and it lacks everything after that commit. |
 
 ### Next step: why do some two-group splits beat the flat scores?
 
@@ -118,7 +120,7 @@ What the table does not explain yet:
 - **GN offline.** After the Codex review it was withdrawn rather than patched, and the summarizer now guards against it.
 - **Long jobs.** They are started detached (`nohup setsid`), after a session interruption killed two background sweeps.
 - **Selection bias.** A split picked on one evaluation split must be confirmed on data it was not picked on before it is reported.
-- **Git.** Commits and pushes happen only when asked. Pushes to `ood-baselines` use the owner bypass of the pull-request rule. `CLAUDE.md` lives in `.claude/` and is tracked.
+- **Git.** Commits and pushes happen only when asked. Pushes to protected branches use the owner bypass of the pull-request rule (see `rules/branches.md`). `CLAUDE.md` lives in `.claude/` and is tracked.
 
 ### Open housekeeping
 
