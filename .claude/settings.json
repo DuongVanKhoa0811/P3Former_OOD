@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(/home/khoadv/miniconda3/envs/p3former/bin/python tests/test_*)",
+      "Bash(nvidia-smi --query-gpu=*)",
+      "Bash(/home/khoadv/miniconda3/envs/p3former/bin/python -m pytest tests/ -q)",
+      "Bash(unzip -l *)",
+      "Bash(pdfinfo *)",
+      "Bash(git ls-tree *)",
+      "Bash(pwd -P)",
+      "Bash(nvidia-smi --query-compute-apps=*)",
+      "Bash(git check-ignore *)"
+    ]
+  }
+}
