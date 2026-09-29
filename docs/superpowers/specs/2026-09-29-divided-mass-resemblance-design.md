@@ -1,7 +1,7 @@
 # Why two-group splits beat flat: divided mass and OOD–class resemblance
 
 Date: 2026-09-29
-Status: approved in chat (2026-09-29); written spec awaiting review
+Status: approved (2026-09-30); plan: `docs/superpowers/plans/2026-09-30-divided-mass-resemblance.md`
 Branch: `ood-baselines/grouping`
 
 ## Goal
@@ -69,7 +69,9 @@ All paths are under `work_dirs/p3former_2xb1_3x_dso_ood_dump/`.
 The new option `--subsets SPEC` replaces the random sample, and the always-included
 vehicle-vs-rest reference, with an explicit list. `SPEC` is either `singletons` (the 24
 single-class splits) or the path to a JSON list of class-id lists. Scores, bins and the
-log format are unchanged. It is run with the torch backend for the 24 single-class splits
+log format are unchanged. `--subsets` requires `--out-dir`, because the default directory
+is the random sweep's `bipartitions/`, which it would overwrite. It is run with the torch
+backend for the 24 single-class splits
 on each set, writing `singletons{,_test,_test_cetran}/`. The 21 splits present in both the
 sweep and the singletons logs must agree to within 0.02: blocks of different shape may
 round the group masses differently in the last ulp.
@@ -127,6 +129,7 @@ never hidden:
 - `cetran.tsv`, `test.tsv` and `test_cetran.tsv`, one row per split;
 - `flat.tsv`, the flat reference per set and δ;
 - `robust.tsv`;
+- `rho.tsv`, every Spearman ρ in long format, which the figures read;
 - `summary.md`, with the checks, the single-class table at δ = 0.05, the robust table and
   the ρ tables.
 
@@ -145,7 +148,9 @@ in the style of `trash/bubble_chart.py`. That style is:
 - bubble area ∝ |improvement|;
 - log–log axes.
 
-The panels are (a) Cetran, (b) Test and (c) Test + Cetran.
+The panels are (a) Cetran, (b) Test and (c) Test + Cetran, in a 2 × 2 grid whose fourth
+cell holds the legends. The bubble-chart file names carry the threshold (e.g.
+`bubble_singletons_0.05.pdf`), so figures at several thresholds can coexist.
 
 - **`bubble_singletons`**: x = ID divided %, y = OOD divided % at `--threshold` (default
   0.05).
@@ -176,7 +181,8 @@ The panels are (a) Cetran, (b) Test and (c) Test + Cetran.
   code or the configs.
 - **Run.** The model is built from the config as in `test.py` (`custom_imports`, default
   scope, checkpoint). The test dataloader reads `--ann` with batch size 1, on one GPU,
-  under `torch.no_grad` and with TF32 off.
+  under `torch.no_grad`. The TF32 setting is left as `test.py` leaves it, so the features
+  and logits come from the same numerics that wrote the logits dumps.
 - **Per frame.** Voxel tensors are mapped to points through `gt_pts_seg.point2voxel_map`.
   Ground truth follows `_OODPointMetric`: a point is OOD when its raw id
   `pts_instance_mask % 2**16` is 17 (Stop) or 28 (Others), and ID when its mapped label is
@@ -202,9 +208,10 @@ The panels are (a) Cetran, (b) Test and (c) Test + Cetran.
   A `meta.json` records the config, checkpoint, ann file, sampling parameters and counts.
   The tool refuses an out dir that is not empty.
 - **Checks.**
-  - On every frame, feat @ W[:24]ᵀ (W = `sem_queries.weight`) must reproduce the captured
-    logits, within max |diff| ≤ 1e-3 · max(1, max |z|) in float32, before the float16
-    cast. This proves the layer.
+  - On every frame, feat @ W[:24]ᵀ (W = `sem_queries.weight`), computed in float64, must
+    reproduce the captured logits within max |diff| ≤ 1e-2 · max(1, max |z|), before
+    the float16 cast. The tolerance leaves room for TF32 rounding, while capturing the
+    wrong tensor would be off by O(1). This proves the layer.
   - `--check-dump DIR`: frames are matched to a logits dump by `lidar_path`, and at
     `index` the sampled logits must equal the dump's to within 0.05, and `mapped` and
     `ood` exactly.
