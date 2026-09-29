@@ -3,7 +3,9 @@
 Run from the repo root:
     /home/khoadv/miniconda3/envs/p3former/bin/python tests/test_sweep_bipartitions.py
 """
+import json
 import os
+import subprocess
 import sys
 import tempfile
 
@@ -318,6 +320,62 @@ def test_backends_and_several_dump_dirs():
     print('test_backends_and_several_dump_dirs passed')
 
 
+def test_load_subsets():
+    assert sb.load_subsets('singletons') == [(c, ) for c in range(sb.NUM_CLASSES)]
+    assert sb.singleton_subsets() == sb.load_subsets('singletons')
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, 'subsets.json')
+        with open(path, 'w') as fh:  # id lists and partitions.json items
+            json.dump([[3], list(range(5, 24)), {'A': [16], 'B': []}], fh)
+        assert sb.load_subsets(path) == [(3, ), (0, 1, 2, 3, 4), (16, )]
+        for bad in ([[3], [3]], [[]], [list(range(24))], []):
+            with open(path, 'w') as fh:
+                json.dump(bad, fh)
+            try:
+                sb.load_subsets(path)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(f'{bad} accepted')
+    print('test_load_subsets passed')
+
+
+def test_sweep_explicit_subsets():
+    with tempfile.TemporaryDirectory() as tmp:
+        dump_dir = os.path.join(tmp, 'logits')
+        os.makedirs(dump_dir)
+        _write_dump(dump_dir)
+        kwargs = dict(bins=2**14, workers=1, chunk=4, top=2)
+        singles = sb.sweep(dump_dir, os.path.join(tmp, 'singletons'),
+                           subsets=sb.singleton_subsets(), **kwargs)
+        assert set(singles) == set(sb.FLAT_KEYS) | {
+            f's{c}_{k}' for c in range(sb.NUM_CLASSES) for k in sb.HIER_KEYS}
+        log = os.path.join(tmp, 'singletons', 'bipartitions.log')
+        assert offline_sweep_logs([log]) == [log]  # still a sweep log
+        with open(log) as fh:
+            assert '24 explicit two-group partitions' in fh.read()
+        # a split scored in another block agrees with its single-class row
+        mixed = sb.sweep(dump_dir, os.path.join(tmp, 'mixed'),
+                         subsets=[(0, 1, 2, 3, 4), (7, ), (3, )], **kwargs)
+        for c in (3, 7):
+            for key in sb.HIER_KEYS:
+                for k in ('auroc', 'ap', 'fpr95'):
+                    assert abs(mixed[f's{c}_{key}'][k]
+                               - singles[f's{c}_{key}'][k]) < 2e-3, (c, key, k)
+    print('test_sweep_explicit_subsets passed')
+
+
+def test_subsets_requires_out_dir():
+    with tempfile.TemporaryDirectory() as tmp:
+        proc = subprocess.run(
+            [sys.executable,
+             os.path.join(_REPO_ROOT, 'tools', 'sweep_bipartitions.py'), tmp,
+             '--subsets', 'singletons'],
+            capture_output=True, text=True, cwd=_REPO_ROOT)
+        assert proc.returncode == 2 and '--out-dir' in proc.stderr, proc.stderr
+    print('test_subsets_requires_out_dir passed')
+
+
 if __name__ == '__main__':
     test_class_names_match_dataset()
     test_sampling()
@@ -327,4 +385,7 @@ if __name__ == '__main__':
     test_sweep_end_to_end()
     test_torch_scores_match_numpy()
     test_backends_and_several_dump_dirs()
+    test_load_subsets()
+    test_sweep_explicit_subsets()
+    test_subsets_requires_out_dir()
     print('ALL TESTS PASSED')

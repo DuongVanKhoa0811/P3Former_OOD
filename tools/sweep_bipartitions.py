@@ -34,6 +34,12 @@ on CPU worker processes; ``--backend torch --device cuda:0`` runs the same
 two passes on a GPU, which the larger splits need (test + Cetran has 1.3B
 points: hours on CPU, minutes on a GPU). The model is never run either way.
 
+``--subsets`` replaces the random sample with an explicit list:
+``singletons`` (the 24 single-class splits {c} | rest, all of which
+tools/divided_mass.py needs) or a JSON file of class-id lists (a sweep's
+``partitions.json`` works too). ``--out-dir`` is then required, so that the
+random sweep's outputs are never overwritten.
+
 Outputs in ``--out-dir`` (default ``<dump_dir>/../bipartitions``; required
 with several dump directories):
     bipartitions.log   ``method | AUROC | AP | FPR@95`` rows -- the flat
@@ -52,6 +58,10 @@ hour with 8 workers and ~25 GB RAM):
         work_dirs/p3former_2xb1_3x_dso_ood_dump/logits_test \\
         work_dirs/p3former_2xb1_3x_dso_ood_dump/logits \\
         --out-dir work_dirs/p3former_2xb1_3x_dso_ood_dump/bipartitions_test_cetran
+    # the 24 single-class splits
+    python tools/sweep_bipartitions.py --backend torch --device cuda:0 \\
+        work_dirs/p3former_2xb1_3x_dso_ood_dump/logits --subsets singletons \\
+        --out-dir work_dirs/p3former_2xb1_3x_dso_ood_dump/singletons
 """
 import argparse
 import glob
@@ -126,6 +136,33 @@ def sample_bipartitions(num, seed=0):
         if subset not in seen:
             seen.add(subset)
             subsets.append(subset)
+    return subsets
+
+
+def singleton_subsets():
+    """The 24 single-class splits {c} | rest, as canonical subsets."""
+    return [canonical([c]) for c in range(NUM_CLASSES)]
+
+
+def load_subsets(spec):
+    """Explicit bipartitions for ``--subsets``: ``'singletons'``, or the path
+    to a JSON list whose items are class-id lists or ``{"A": [...]}`` dicts
+    (the ``partitions.json`` a sweep writes). Canonical subsets in the given
+    order; a split listed twice is an error."""
+    if spec == 'singletons':
+        return singleton_subsets()
+    with open(spec) as fh:
+        items = json.load(fh)
+    subsets, seen = [], set()
+    for item in items:
+        subset = canonical(item['A'] if isinstance(item, dict) else item)
+        if subset in seen:
+            raise ValueError(f'{spec}: partition {partition_name(subset)} '
+                             'is listed twice')
+        seen.add(subset)
+        subsets.append(subset)
+    if not subsets:
+        raise ValueError(f'{spec}: no partitions')
     return subsets
 
 
@@ -367,7 +404,7 @@ def torch_counts(index, size):
     return out
 
 
-def _prefetch(files, depth=8):
+def prefetch_frames(files, depth=8):
     """Yield ``load_frame(path)`` in order, read ahead by a few threads."""
     from collections import deque
     from concurrent.futures import ThreadPoolExecutor
@@ -395,7 +432,7 @@ def _torch_passes(files, a_mask, bins, eps, chunk, device):
     hi = {k: torch.full((num, ), -np.inf, **f64) for k in HIER_KEYS}
     lo.update({k: np.inf for k in FLAT_KEYS})
     hi.update({k: -np.inf for k in FLAT_KEYS})
-    for i, (z, _) in enumerate(_prefetch(files)):
+    for i, (z, _) in enumerate(prefetch_frames(files)):
         if z.shape[0]:
             q = torch_base_quantities(torch.from_numpy(z).to(dev))
             for key, s in torch_flat_scores(q).items():
@@ -420,7 +457,7 @@ def _torch_passes(files, a_mask, bins, eps, chunk, device):
     flat_hist = {k: torch.zeros((2, bins), dtype=torch.int64, device=dev)
                  for k in FLAT_KEYS}
     counts = np.zeros(2, dtype=np.int64)
-    for i, (z, ood) in enumerate(_prefetch(files)):
+    for i, (z, ood) in enumerate(prefetch_frames(files)):
         if z.shape[0]:
             order = np.argsort(ood, kind='stable')  # ID first, OOD last
             n_id = int(ood.size - ood.sum())
@@ -555,9 +592,10 @@ def _numpy_passes(files, a_mask, bins, eps, chunk, workers):
 
 def sweep(dump_dirs, out_dir, num=500, seed=0, bins=2**16, workers=8,
           chunk=64, top=10, rank_exclude=('odin', ), backend='numpy',
-          device='cuda:0', bin_eps=BIN_EPS):
-    """Score ``num`` bipartitions over the frames of one or several dump
-    directories (evaluated together as one split)."""
+          device='cuda:0', bin_eps=BIN_EPS, subsets=None):
+    """Score ``num`` random bipartitions -- or the explicit ``subsets``, when
+    given (``num`` and ``seed`` are then unused) -- over the frames of one
+    or several dump directories (evaluated together as one split)."""
     if isinstance(dump_dirs, str):
         dump_dirs = [dump_dirs]
     files = []
@@ -567,13 +605,17 @@ def sweep(dump_dirs, out_dir, num=500, seed=0, bins=2**16, workers=8,
             raise FileNotFoundError(f'no .npz dumps in {dump_dir}')
         files += found
     dump_dir = ' + '.join(dump_dirs)
-    subsets = sample_bipartitions(num, seed)
+    if subsets is None:
+        subsets = sample_bipartitions(num, seed)
+        what = f'{num} two-group partitions (seed {seed})'
+    else:
+        subsets = [canonical(s) for s in subsets]
+        what = f'{len(subsets)} explicit two-group partitions'
     names = [partition_name(s) for s in subsets]
     a_mask = subsets_to_mask(subsets)
     sizes = np.bincount(a_mask.sum(axis=1), minlength=NUM_CLASSES // 2 + 1)
-    print(f'{len(files)} frames in {dump_dir}; {len(subsets)} bipartitions '
-          f'(seed {seed}), smaller-group sizes 1..{NUM_CLASSES // 2}: '
-          + ' '.join(str(n) for n in sizes[1:]))
+    print(f'{len(files)} frames in {dump_dir}; {what}, smaller-group sizes '
+          f'1..{NUM_CLASSES // 2}: ' + ' '.join(str(n) for n in sizes[1:]))
 
     t0 = time.time()
     if backend == 'torch':
@@ -599,21 +641,20 @@ def sweep(dump_dirs, out_dir, num=500, seed=0, bins=2**16, workers=8,
 
     os.makedirs(out_dir, exist_ok=True)
     log_path = osp.join(out_dir, 'bipartitions.log')
-    write_log(log_path, rows, n_id, n_ood, out_dir, dump_dir, num, seed,
-              bins, bin_eps)
+    write_log(log_path, rows, n_id, n_ood, out_dir, dump_dir, what, bins,
+              bin_eps)
     write_partitions(out_dir, names, subsets)
     print(f'wrote {log_path}')
     print_ranking(log_path, names, subsets, top, rank_exclude)
     return rows
 
 
-def write_log(path, rows, n_id, n_ood, out_dir, dump_dir, num, seed, bins,
+def write_log(path, rows, n_id, n_ood, out_dir, dump_dir, what, bins,
               bin_eps):
     with open(path, 'w') as fh:
         fh.write(f"work_dir = '{out_dir}'\n")
-        fh.write(f'# offline bipartition sweep: {num} two-group partitions '
-                 f'(seed {seed}) of the {NUM_CLASSES} classes, scored from '
-                 f'{dump_dir} with {bins} histogram bins '
+        fh.write(f'# offline bipartition sweep: {what} of the {NUM_CLASSES} '
+                 f'classes, scored from {dump_dir} with {bins} histogram bins '
                  + (f'log-spaced towards both ends (eps {bin_eps:g})'
                     if bin_eps > 0 else 'of equal width') + '\n')
         fh.write(f'Point-level OOD evaluation: {n_id} ID points, {n_ood} '
@@ -655,10 +696,11 @@ def print_ranking(log_path, names, subsets, top, exclude):
     print('flat reference (AUROC/AP/FPR@95): ' + '  '.join(
         f'{k} {v[0]:.2f}/{v[1]:.2f}/{v[2]:.2f}' for k, v in flat.items()))
     reference = partition_name(canonical(REFERENCE))
-    for key in ('group_msp', 'gn_msp'):
-        m = rows[f'{reference}_{key}']
-        print(f'reference {reference} (vehicle vs rest) {key}: '
-              f'{m[0]:.2f}/{m[1]:.2f}/{m[2]:.2f}')
+    if reference in composition:  # always there in a random sweep
+        for key in ('group_msp', 'gn_msp'):
+            m = rows[f'{reference}_{key}']
+            print(f'reference {reference} (vehicle vs rest) {key}: '
+                  f'{m[0]:.2f}/{m[1]:.2f}/{m[2]:.2f}')
     # Group family only: the offline GN MSP / GN Entropy rows are approximate
     # (see the module docstring), so no GN ranking is published here and
     # summarize_hierarchy_ablation.py refuses --family gn on this log.
@@ -697,6 +739,11 @@ def main():
     ap.add_argument('--num', type=int, default=500,
                     help='number of bipartitions (incl. vehicle vs rest)')
     ap.add_argument('--seed', type=int, default=0)
+    ap.add_argument('--subsets', default=None, metavar='SPEC',
+                    help="score an explicit list instead of --num random "
+                    "partitions: 'singletons' (the 24 single-class splits) "
+                    'or a JSON list of class-id lists (a partitions.json '
+                    'works too); needs --out-dir')
     ap.add_argument('--bins', type=int, default=2**16,
                     help='histogram bins per score (online metric: 2^20)')
     ap.add_argument('--bin-eps', type=float, default=BIN_EPS,
@@ -720,6 +767,9 @@ def main():
                     help='comma-separated baselines left out of the console '
                     'ranking (maxlogit always is)')
     args = ap.parse_args()
+    if args.subsets and args.out_dir is None:
+        ap.error("--subsets needs --out-dir: the default is the random "
+                 "sweep's directory, which it would overwrite")
     if args.out_dir is None and len(args.dump_dirs) > 1:
         ap.error('--out-dir is required with several dump directories')
     out_dir = args.out_dir or osp.join(
@@ -728,7 +778,8 @@ def main():
           bins=args.bins, workers=args.workers, chunk=args.chunk,
           top=args.top,
           rank_exclude=[b for b in args.rank_exclude.split(',') if b],
-          backend=args.backend, device=args.device, bin_eps=args.bin_eps)
+          backend=args.backend, device=args.device, bin_eps=args.bin_eps,
+          subsets=load_subsets(args.subsets) if args.subsets else None)
 
 
 if __name__ == '__main__':
