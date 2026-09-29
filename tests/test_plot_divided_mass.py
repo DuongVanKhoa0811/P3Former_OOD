@@ -97,7 +97,76 @@ def test_labels_do_not_overlap_when_there_is_room():
     print('test_labels_do_not_overlap_when_there_is_room passed')
 
 
+def test_dense_singletons_fit_and_refine_does_not_worsen_overlap():
+    """Regression test for the review finding on bubble_singletons_0.05.png:
+    labels colliding in dense clusters, a label sitting on the panel title,
+    and a label clipped at the figure edge. Reproduces the densest real
+    panel (the 24 single-class splits of the 'test' set, the one where the
+    review found the title collision and the edge clipping) at the actual
+    bubble_grid figure size, and checks every label ends up fully inside the
+    figure and clear of the title, and that refinement (the default) never
+    leaves more total label-to-label overlap than the greedy pass alone."""
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from matplotlib.text import Text
+
+    import plot_divided_mass as pdm
+
+    with tempfile.TemporaryDirectory() as tmp:
+        _fake_divided_dir(tmp)
+        rows = dm.read_tsv(os.path.join(tmp, 'test.tsv'))
+        flat = dm.read_tsv(os.path.join(tmp, 'flat.tsv'))
+    key = dm.delta_key(dm.HEADLINE)
+    points = [dict(x=r[f'id_div@{key}'], y=r[f'ood_div@{key}'],
+                    value=r['improvement'], text=r['group_A'])
+              for r in rows if r['size_A'] == 1]
+    star = next((row[f'id_unc@{key}'], row[f'ood_unc@{key}']) for row in flat
+                if row['set'] == dm.SETS['test']['label'])
+    xlim = pdm.log_limits([p['x'] for p in points] + [star[0]])
+    ylim = pdm.log_limits([p['y'] for p in points] + [star[1]])
+
+    def render(refine):
+        fig, axes = plt.subplots(2, 2, figsize=(7.0, 7.6))
+        ax = axes[0, 0]
+        items = pdm.bubble_panel(ax, points, xlim, ylim, star=star)
+        ax.set_title('(a) Test', loc='left')
+        kwargs = dict(star=star) if refine is None else dict(star=star,
+                                                              refine=refine)
+        pdm.place_labels(ax, items, **kwargs)
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+        boxes = [pdm._box(Text.get_window_extent(t, renderer))
+                 for t in ax.texts]
+        fig_box = pdm._box(fig.bbox)
+        title_box = pdm._box(Text.get_window_extent(ax.title, renderer))
+        plt.close(fig)
+        return boxes, fig_box, title_box
+
+    def pairwise_overlap(boxes):
+        return sum(pdm._overlap(a, b)
+                   for i, a in enumerate(boxes) for b in boxes[i + 1:])
+
+    boxes, fig_box, title_box = render(refine=None)  # the real default
+    assert len(boxes) == len(points)
+    for box in boxes:
+        assert pdm._outside(box, fig_box) <= 1e-6, ('label outside the '
+                                                     f'figure: {box}')
+        assert pdm._overlap(box, title_box) == 0.0, ('label on the title: '
+                                                      f'{box}')
+    refined_total = pairwise_overlap(boxes)
+
+    greedy_boxes, _, _ = render(refine=False)
+    greedy_total = pairwise_overlap(greedy_boxes)
+    assert refined_total <= greedy_total, (refined_total, greedy_total)
+    print(f'label-overlap area: greedy-only {greedy_total:.1f} px^2, '
+          f'refined {refined_total:.1f} px^2')
+    print('test_dense_singletons_fit_and_refine_does_not_worsen_overlap '
+          'passed')
+
+
 if __name__ == '__main__':
     test_figures_are_written()
     test_labels_do_not_overlap_when_there_is_room()
+    test_dense_singletons_fit_and_refine_does_not_worsen_overlap()
     print('ALL TESTS PASSED')

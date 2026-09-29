@@ -77,9 +77,14 @@ STAT_STYLE = OrderedDict([  # rho_vs_threshold: one colour per statistic
 TARGET_LABELS = OrderedDict([
     ('d_auroc', r'$\Delta$AUROC'), ('d_ap', r'$\Delta$AP'),
     ('d_fpr95', r'$\Delta$FPR@95'), ('improvement', 'improvement')])
-# Label candidates: 8 directions, then the same further out with a leader.
-LABEL_ANGLES = (0, 180, 90, 270, 45, 135, 315, 225)
-LABEL_GAPS = (0.0, 7.0, 14.0)  # extra points beyond the bubble edge
+# Label candidates: 16 directions (right, left, up, down first, then the
+# diagonals, then the remaining eighth-turns), each at 5 extra gaps beyond
+# the bubble edge; a gap > 0 draws a leader line.
+LABEL_ANGLES = (0, 180, 90, 270, 45, 135, 225, 315,
+                22.5, 67.5, 112.5, 157.5, 202.5, 247.5, 292.5, 337.5)
+LABEL_GAPS = (0.0, 6.0, 12.0, 20.0, 30.0)
+_FIG_FIT_TOL = 1e-6  # a candidate box spilling less than this still "fits"
+_STAR_SIZE = 70  # bubble_panel's scatter ``s`` for the flat-MSP star
 
 
 def tint(colour, k=0.35):
@@ -137,7 +142,7 @@ def _outside(box, frame):
     return (box[2] - box[0]) * (box[3] - box[1]) - _overlap(box, frame)
 
 
-def _annotate(ax, item, angle, gap, fontsize, leader):
+def _annotate(ax, item, angle, gap, fontsize, leader, renderer):
     th = math.radians(angle)
     dist = item['radius'] + 3.0 + gap
     dx, dy = dist * math.cos(th), dist * math.sin(th)
@@ -145,19 +150,42 @@ def _annotate(ax, item, angle, gap, fontsize, leader):
     va = 'bottom' if dy > 0.3 * dist else 'top' if dy < -0.3 * dist else 'center'
     arrow = (dict(arrowstyle='-', lw=0.4, color=item['colour'], shrinkA=0,
                   shrinkB=item['radius']) if leader else None)
-    return ax.annotate(item['text'], (item['x'], item['y']), xytext=(dx, dy),
-                       textcoords='offset points', ha=ha, va=va,
-                       multialignment=ha, color=item['colour'],
-                       fontsize=fontsize, linespacing=1.05, zorder=10,
-                       arrowprops=arrow, annotation_clip=False)
+    ann = ax.annotate(item['text'], (item['x'], item['y']), xytext=(dx, dy),
+                      textcoords='offset points', ha=ha, va=va,
+                      multialignment=ha, color=item['colour'],
+                      fontsize=fontsize, linespacing=1.05, zorder=10,
+                      arrowprops=arrow, annotation_clip=False)
+    # A freshly created annotation's own position is not yet resolved against
+    # the current transform, so get_window_extent() on it would read back a
+    # stale/placeholder box (e.g. anchored near the origin) until something
+    # draws it; ann.draw(renderer) resolves it cheaply, without a full and
+    # much more expensive fig.canvas.draw() of every artist on the figure.
+    ann.draw(renderer)
+    return ann
 
 
-def place_labels(ax, items, fontsize=6.5):
+def place_labels(ax, items, fontsize=6.0, star=None, refine=True):
     """Label every item (dict: x, y in data units, text, colour, radius in
-    points), largest bubble first, at the candidate position -- 8 directions
-    at 3 distances -- whose text box overlaps the placed labels, the other
-    bubbles and the outside of the axes least. A label pushed away from its
-    bubble gets a thin leader line."""
+    points), largest bubble first, at the candidate position -- 16
+    directions at 5 distances, right/left/up/down tried first -- whose text
+    box overlaps the placed labels, the other bubbles, the flat-MSP
+    ``star`` (data coords, when the panel has one) and the panel's title
+    least, restricted to the candidates that fit fully inside the figure
+    (the one that spills least, when none does). A label pushed away from
+    its bubble gets a thin leader line.
+
+    With ``refine`` (the default), up to 3 more passes then revisit every
+    label, largest first, and search again -- against every other label's
+    *current* position -- for a candidate that fits. The move is committed
+    only when it does not increase that label's own overlap with the other
+    labels *and* it strictly lowers the label's full cost (which also counts
+    the bubbles, the star and the title, and 20x the area outside the axes),
+    so a label can still move to clear the title or the axes frame when it
+    can do so without crowding another label more. A pass that moves
+    nothing stops the refinement early. Since every other label stays put
+    while one is reconsidered, and its own overlap with them never goes up,
+    the total label-to-label overlap of the whole panel never increases.
+    ``refine=False`` returns the greedy pass alone."""
     fig = ax.figure
     fig.canvas.draw()
     renderer = fig.canvas.get_renderer()
@@ -167,26 +195,84 @@ def place_labels(ax, items, fontsize=6.5):
         cx, cy = ax.transData.transform((item['x'], item['y']))
         r = item['radius'] * px
         bubbles.append((cx - r, cy - r, cx + r, cy + r))
-    frame = _box(ax.get_window_extent(renderer))
-    placed = []
-    for i in sorted(range(len(items)), key=lambda j: -items[j]['radius']):
-        best = None
+    star_box = None
+    if star is not None:
+        cx, cy = ax.transData.transform(star)
+        r = math.sqrt(_STAR_SIZE / math.pi) * px
+        star_box = (cx - r, cy - r, cx + r, cy + r)
+    title_box = _box(Text.get_window_extent(ax.title, renderer))
+    ax_frame = _box(ax.get_window_extent(renderer))
+    fig_frame = _box(fig.bbox)
+
+    def cost(i, box, others):
+        """Overlap of ``box`` (label ``i``) with every obstacle: the other
+        current labels (``others``), every bubble but its own, the star and
+        the title (all at weight 1), plus 20x the area outside the axes."""
+        c = (sum(_overlap(box, b) for b in others)
+             + sum(_overlap(box, b) for j, b in enumerate(bubbles) if j != i)
+             + _overlap(box, title_box) + 20.0 * _outside(box, ax_frame))
+        if star_box is not None:
+            c += _overlap(box, star_box)
+        return c
+
+    def label_overlap(box, others):
+        """``box``'s overlap with the other current labels alone -- the
+        quantity that must never increase across a refinement move, since
+        it is exactly this label's contribution to the panel's total
+        label-to-label overlap."""
+        return sum(_overlap(box, b) for b in others)
+
+    def candidate(i, item, others):
+        """Best (angle, gap) for ``item``: least ``cost`` among the 80
+        candidates that fit fully inside the figure, else the one among all
+        80 that spills least from it."""
+        best, fallback = None, None
         for gap in LABEL_GAPS:
             for angle in LABEL_ANGLES:
-                ann = _annotate(ax, items[i], angle, gap, fontsize, False)
+                ann = _annotate(ax, item, angle, gap, fontsize, False, renderer)
                 box = _box(Text.get_window_extent(ann, renderer))
                 ann.remove()
-                cost = (sum(_overlap(box, b) for b in placed)
-                        + sum(_overlap(box, b) for j, b in enumerate(bubbles)
-                              if j != i)
-                        + 10.0 * _outside(box, frame))
-                if best is None or cost < best[0]:
-                    best = (cost, angle, gap)
-            if best[0] == 0.0:
+                spill = _outside(box, fig_frame)
+                if fallback is None or spill < fallback[0]:
+                    fallback = (spill, angle, gap)
+                if spill <= _FIG_FIT_TOL:
+                    c = cost(i, box, others)
+                    if best is None or c < best[0]:
+                        best = (c, angle, gap)
+            if best is not None and best[0] == 0.0:
                 break
-        _, angle, gap = best
-        ann = _annotate(ax, items[i], angle, gap, fontsize, leader=gap > 0)
-        placed.append(_box(Text.get_window_extent(ann, renderer)))
+        return (best[1], best[2]) if best is not None else fallback[1:]
+
+    def place(i, item, others):
+        angle, gap = candidate(i, item, others)
+        ann = _annotate(ax, item, angle, gap, fontsize, gap > 0, renderer)
+        return ann, _box(Text.get_window_extent(ann, renderer))
+
+    order = sorted(range(len(items)), key=lambda j: -items[j]['radius'])
+    annotations, placed = [None] * len(items), [None] * len(items)
+    for i in order:
+        others = [b for b in placed if b is not None]
+        annotations[i], placed[i] = place(i, items[i], others)
+
+    for _ in range(3 if refine else 0):
+        moved = False
+        for i in order:
+            others = [placed[j] for j in range(len(items)) if j != i]
+            old_cost = cost(i, placed[i], others)
+            if old_cost <= 0.0:
+                continue
+            old_overlap = label_overlap(placed[i], others)
+            ann, box = place(i, items[i], others)
+            better = (label_overlap(box, others) <= old_overlap
+                      and cost(i, box, others) < old_cost)
+            if better:
+                annotations[i].remove()
+                annotations[i], placed[i] = ann, box
+                moved = True
+            else:
+                ann.remove()
+        if not moved:
+            break
 
 
 # ---------------------------------------------------------------- bubbles
@@ -271,22 +357,23 @@ def bubble_grid(panels, xlabel, ylabel, stem, stars=None, backgrounds=None):
         xs += [x for x, _ in points]
         ys += [y for _, y in points]
     xlim, ylim = log_limits(xs), log_limits(ys)
-    fig, axes = plt.subplots(2, 2, figsize=(7.0, 6.6))
-    fig.subplots_adjust(left=0.09, right=0.98, top=0.95, bottom=0.08,
-                        wspace=0.22, hspace=0.3)
+    fig, axes = plt.subplots(2, 2, figsize=(7.0, 7.6))
+    fig.subplots_adjust(left=0.09, right=0.97, top=0.94, bottom=0.07,
+                        wspace=0.24, hspace=0.32)
     cells = (axes[0, 0], axes[0, 1], axes[1, 0])
     labelled, zeros = [], False
     for i, (ax, (label, points)) in enumerate(zip(cells, panels.items())):
         labelled.append((ax, bubble_panel(ax, points, xlim, ylim,
                                           stars.get(label),
-                                          backgrounds.get(label))))
+                                          backgrounds.get(label)),
+                         stars.get(label)))
         zeros = zeros or any(p['x'] <= 0 or p['y'] <= 0 for p in points)
         ax.set_title(f'({"abc"[i]}) {label}', loc='left')
         ax.set_xlabel(xlabel)
         if i != 1:
             ax.set_ylabel(ylabel)
-    for ax, items in labelled:
-        place_labels(ax, items)
+    for ax, items, star in labelled:
+        place_labels(ax, items, star=star)
     legend_cell(axes[1, 1], star=bool(stars), background=bool(backgrounds),
                 zeros=zeros)
     save(fig, stem)
