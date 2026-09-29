@@ -92,15 +92,10 @@ What the table does not explain yet:
 - On test, {bicycle} has a clean OOD/ID ratio yet scores −40.1, with FPR@95 at 89.20.
 - ID points outnumber OOD points about 33× on Cetran and 63× on test, so absolute counts may matter more than percentages. For building on test, about 26 M ID points have divided mass, against 8 M OOD points.
 
-**Analysis plan:**
+**Analysis plan** (spec: `docs/superpowers/specs/2026-09-29-divided-mass-resemblance-design.md`). Both items are reported on Cetran, test and test + Cetran, for the single-class splits and for the robust splits (improvement > 0 on all three sets).
 
-1. **Extend the measure.** Compute divided mass for all 24 single-class splits and all 500 bipartitions, with P_A = the summed mass of the smaller group. Relate the OOD and ID divided counts to ΔAUROC, ΔAP and ΔFPR@95 on each split, and vary the 0.05/0.95 threshold.
-2. **False-positive absorption.** Take flat MSP's ID false positives at the TPR-95 threshold and find their top-2 class pairs. Then measure which splits absorb them, meaning both classes of the pair fall on one side. This should explain ΔFPR@95.
-3. **OOD confusion profile.** Collect the top-1/top-2 class pairs of the OOD points per split. On test, building/overhead-bridge is the most common pair, at 14%. Predict the best split from these statistics and compare it with the sweep's winners.
-4. **Transfer.** Explain, per sequence, why Cetran and test prefer different splits: truck- and gate-like OOD objects on Cetran, building- and bridge-like ones on test. Study the 32 splits that beat flat on both.
-5. **Logit scores.** Explain why Group Energy barely moves (under 1 point) while the probability scores gain.
-6. **Figures.** Make distribution plots of flat vs `s16` / `s1.3.17`, and a scatter of divided mass against improvement. `plot_ood_score_distributions.py` only understands six-group `p_` names, so it first needs support for class-id bipartitions.
-7. **Online confirmation.** Confirm the chosen splits online with `class_groups_variants`, on data they were not selected on, and write a `DOCs.md` entry.
+1. **Extend the measure.** Compute divided mass for all 24 single-class splits and all 500 bipartitions, with P_A = the summed mass of the smaller group. Relate the OOD and ID divided counts to ΔAUROC, ΔAP and ΔFPR@95 on each split, and vary the 0.05/0.95 threshold. Compare every split with flat MSP at the same threshold, and draw bubble charts in the style of `trash/bubble_chart.py`.
+2. **Resemblance in feature space.** Measure how much the OOD points overlap each ID class in the penultimate features (`pe_features`, the input of the semantic classifier). The measure is a kNN share against the evaluation split's own ID points. Then test the hypothesis that the best split puts the classes the OOD objects resemble on one side, against the alternative from item 1 that it cuts through them. The test is correlational only.
 
 ### Key decisions and how they were handled
 
