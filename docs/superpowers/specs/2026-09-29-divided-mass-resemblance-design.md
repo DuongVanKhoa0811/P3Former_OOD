@@ -218,24 +218,32 @@ The panels are (a) Cetran, (b) Test and (c) Test + Cetran.
 Each set is analysed in two spaces: `full` (`feat`, what the classifier sees) and
 `appearance` (`feat − pos`). Test + Cetran is the union of both sample sets.
 
-- **Reference bank.** Per ID class, up to `--bank-per-class` (4,000) samples, drawn in
-  proportion to their weight and L2-normalised. The remaining ID samples provide up to
-  `--query-per-class` (2,000) ID queries per class, disjoint from the bank. A class with
-  fewer than 30 samples is left out of the bank and flagged.
+- **Reference bank.** The kNN needs a set of ID points whose class is known. This bank
+  holds the same number of points per class, up to `--bank-per-class` (4,000), so that no
+  class collects neighbours merely by having more points (road and vegetation dominate
+  the raw counts).
+  - The points are drawn with probability proportional to their sampling weight, so that
+    each class's points represent it across the whole set.
+  - They are L2-normalised, so that similarity is the cosine (direction only).
+  - r_ID (below) runs the same neighbour search for ID points. These query points come
+    from the ID samples that are not in the bank, up to `--query-per-class` (2,000) per
+    class, because a point in the bank would find itself as its own nearest neighbour.
+  - A class with fewer than 30 samples in the set is too rare to be a reference. It is
+    left out and flagged.
 - **kNN.** Cosine similarity with `--k` 10 on a GPU, in chunks; a k = 50 run serves as the
-  sensitivity check. Each query gets the class counts n_c(x) of its k neighbours.
-- **Per class c:**
+  sensitivity check. For a query point x (an OOD point, or an ID query point), n_c(x) is
+  the number of its k nearest bank points that belong to class c. n_c(x)/k is then the
+  share of x's neighbourhood in class c, and the 24 shares of a point sum to 1. For
+  example, 6 gate, 3 building and 1 other-barrier neighbours give gate 0.6, building 0.3
+  and other-barrier 0.1.
+- **Per class c** (r for resemblance):
   - r_OOD(c): the weighted mean of n_c(x)/k over OOD points, i.e. the share of the OOD
     neighbourhood that class c occupies. 1/24 ≈ 4.2% means no preference.
   - r_ID(c): the same over ID points of the other classes, weighted by population (each
     class's queries carry its population share). It measures how much class c's region
     overlaps the other ID classes and is the feature-space analogue of ID divided.
-  - the contrast r_OOD(c) / r_ID(c);
-  - as a robustness check, the nearest-centroid share for OOD points (cosine to the
-    weighted class means);
-  - the classifier's view: the weighted mean softmax P_c and the argmax share over OOD
-    points, and the mean P_c over ID points of other classes;
-  - the OOD columns again per raw OOD class (Stop, Others).
+  - the contrast r_OOD(c) / r_ID(c): above 1, OOD points look like class c more than
+    normal points of other classes do.
 - **Per split A | B** (all 503):
   - R_A = Σ_{c∈A} r_OOD(c), the OOD resemblance mass on the smaller side, and the
     enrichment E_A = R_A / (|A|/24);
@@ -271,6 +279,45 @@ Each set is analysed in two spaces: `full` (`feat`, what the classifier sees) an
   feature-divided % ("cut through") over the 503 splits, with the robust splits
   highlighted and ρ in the panel titles.
 
+### 2d. t-SNE view of the features (`tools/plot_feature_tsne.py`)
+
+A qualitative picture of where the OOD points sit among the ID classes. It reads the
+feature samples of 2a directly.
+
+- **Points.** Per set, up to `--per-class` (300) ID points per class and `--ood` (3,000)
+  OOD points, each drawn in proportion to its weight: about 10k points.
+- **Embedding.** The features are L2-normalised, like the kNN, then reduced to 50
+  dimensions with PCA and embedded with scikit-learn's t-SNE (perplexity 30, PCA
+  initialisation, `--seed` 0). Each set gets its own fit, one panel per set. The space
+  is `full` by default, with `--space appearance` as an option.
+- **Fixed class colours.** A module constant, `CLASS_COLOURS`, maps each of the 24
+  classes to one fixed hex colour. The colour is the same in every panel, set and run.
+  - The six groups of the hierarchy work each get one hue family:
+
+    | group | hue family |
+    | --- | --- |
+    | vehicle | blue |
+    | human | magenta |
+    | ground | ochre |
+    | construction | red |
+    | nature | green |
+    | object | violet |
+
+    Classes within a group get distinct lightness steps of their family, and the family
+    anchors come from the reference categorical palette.
+  - OOD points are black and drawn on top, with one marker for Stop and another for
+    Others.
+- **Labels.** Twenty-four colours cannot all be told apart, least of all under
+  colour-vision deficiency, so colour does not carry identity alone. Each class name
+  is written at the median position of its points, and a legend below the panels lists
+  the classes grouped by family.
+- **Output.** `resemblance/tsne_<space>.{pdf,png}`, in the same style as the other
+  figures.
+
+t-SNE keeps local neighbourhoods but not distances between clusters or cluster sizes,
+so this figure only illustrates the result. The quantitative measure is the kNN share
+of 2b.
+
 ## Testing and verification
 
 - **Unit tests** follow the repo convention (pytest functions plus a
@@ -290,9 +337,10 @@ Each set is analysed in two spaces: `full` (`feat`, what the classifier sees) an
   - `tests/test_ood_class_resemblance.py`:
     - kNN shares on a Gaussian mixture where the OOD cluster sits next to one class;
     - weighting;
-    - feature-divided against brute force;
-    - centroid shares.
-  - Plot smoke tests run both plotting tools on synthetic outputs with the Agg backend.
+    - feature-divided against brute force.
+  - Plot smoke tests run the three plotting tools on synthetic outputs with the Agg
+    backend. `tests/test_plot_feature_tsne.py` also checks that `CLASS_COLOURS` covers
+    exactly the 24 classes, with 24 distinct colours.
 - **Smoke run** of the extraction on `dso_infos_mini.pkl` (5 test frames with Stop /
   Others), with `--check-dump logits_test`.
 - **Review.** An agent reviews the new scripts for formality and maintainability. Its
@@ -310,7 +358,7 @@ Each set is analysed in two spaces: `full` (`feat`, what the classifier sees) an
 
 - Scoring new splits built from the resemblance (the test is correlational, by choice).
 - The GN family: the offline GN MSP and GN Entropy rows are invalid (2026-09-24).
-- Per-sequence transfer, online confirmation, and t-SNE / UMAP views.
+- Per-sequence transfer, online confirmation, and UMAP views.
 
 ## Risks and caveats
 
@@ -323,5 +371,7 @@ Each set is analysed in two spaces: `full` (`feat`, what the classifier sees) an
 - The reference is the evaluation split's own ID points, by choice: the measure is
   resemblance to the classes as they appear in that split, not as learned in training.
 - Automatic label placement may need manual touches for a camera-ready figure.
+- t-SNE layouts depend on the seed and the perplexity, and their cluster distances mean
+  nothing. The figure illustrates the kNN result and is not evidence on its own.
 - The three sets are not independent (Test + Cetran contains the other two), which the
   robust definition inherits.
