@@ -432,12 +432,16 @@ def test_divided_counts_match_direct_counts():
         edges = dm.bin_edges()
         hist = dm.directory_histograms(files, a_mask, edges, chunk=3)
         frames = [sb.load_frame(f) for f in files]
-        z = np.concatenate([f[0] for f in frames])
         ood = np.concatenate([f[1] for f in frames])
         assert list(hist['counts']) == [int((~ood).sum()), int(ood.sum())]
-        p = dm.softmax(z)
-        m = dm.divided_mass(p, a_mask).astype(np.float64)
-        u = dm.flat_uncertainty(p).astype(np.float64)
+        # m exactly as the tool computes it: per frame, in blocks of 3 splits
+        # (another matmul shape may round the last ulp differently)
+        m = np.concatenate([
+            np.concatenate([dm.divided_mass(dm.softmax(z), a_mask[j0:j0 + 3])
+                            for j0 in range(0, len(subsets), 3)])
+            for z, _ in frames], axis=1).astype(np.float64)
+        u = np.concatenate([dm.flat_uncertainty(dm.softmax(z))
+                            for z, _ in frames]).astype(np.float64)
         rows = dm.divided_stats(hist, hist['counts'], edges)
         flat = dm.flat_stats(hist, hist['counts'], edges)
         for d in dm.DELTAS:
