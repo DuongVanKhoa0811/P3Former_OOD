@@ -94,7 +94,31 @@ def test_label_x_clears_the_bar_and_the_marker():
     print('test_label_x_clears_the_bar_and_the_marker passed')
 
 
+def test_feature_panels_skips_unmeasured_classes():
+    import matplotlib
+    matplotlib.use('Agg')
+    import plot_ood_class_resemblance as pcr
+
+    labels = OrderedDict([('cetran', 'Cetran')])
+    profiles = OrderedDict([
+        ('cetran', [
+            {'class': 'car', 'feat_div_id': 1.0, 'feat_div_ood': 2.0,
+             'improvement': 5.0, 'r_ood': 3.0},
+            # no ID samples in the bank: left out, not a measured 0 %
+            {'class': 'bicycle', 'feat_div_id': 4.0, 'feat_div_ood': 6.0,
+             'improvement': -2.0, 'r_ood': float('nan')},
+        ]),
+    ])
+    panels, skipped = pcr.feature_panels(labels, profiles)
+    classes = [p['text'] for p in panels['Cetran']]
+    assert classes == ['car'], classes
+    assert 'bicycle' not in classes
+    assert skipped['Cetran'] == 1, skipped
+    print('test_feature_panels_skips_unmeasured_classes passed')
+
+
 if __name__ == '__main__':
     test_figures_are_written()
     test_label_x_clears_the_bar_and_the_marker()
+    test_feature_panels_skips_unmeasured_classes()
     print('ALL TESTS PASSED')
