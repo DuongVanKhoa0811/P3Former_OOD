@@ -165,8 +165,165 @@ def test_dense_singletons_fit_and_refine_does_not_worsen_overlap():
           'passed')
 
 
+def test_labels_are_drawn_above_every_bubble():
+    """Regression test for F1: bubble_panel draws each bubble at zorder
+    3 + its rank among the panel's points (largest first), which used to
+    reach and then pass the labels' own fixed zorder (10) from the 8th
+    bubble on, covering them (bubble_singletons_0.05.png's 'building',
+    'vegetation' and 'perimeter-barrier'). Every label must now sit above
+    every bubble, however many a panel has."""
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    import plot_divided_mass as pdm
+
+    fig, ax = plt.subplots(figsize=(6, 5))
+    xy = [(10 ** (0.15 * i - 1), 10 ** (1.4 - 0.15 * i)) for i in range(12)]
+    points = [dict(x=x, y=y, value=5 + i, text=f'class {i}')
+             for i, (x, y) in enumerate(xy)]
+    xlim = pdm.log_limits([x for x, _ in xy])
+    ylim = pdm.log_limits([y for _, y in xy])
+    items = pdm.bubble_panel(ax, points, xlim, ylim)
+    pdm.place_labels(ax, items)
+    bubble_zorders = [c.get_zorder() for c in ax.collections]
+    text_zorders = [t.get_zorder() for t in ax.texts]
+    assert len(points) >= 8 and len(text_zorders) == len(points)
+    assert min(text_zorders) > max(bubble_zorders), (text_zorders,
+                                                      bubble_zorders)
+    plt.close(fig)
+    print('test_labels_are_drawn_above_every_bubble passed')
+
+
+def test_robust_panels_labels_by_rank():
+    """F2 regression: the robust chart's foreground points are labelled by
+    rank number (1..top, by worst-set improvement), not by the raw split
+    name -- those pile up over the bubbles of a dense cluster."""
+    with tempfile.TemporaryDirectory() as tmp:
+        _fake_divided_dir(tmp)
+        tables = OrderedDict(
+            (key, dm.read_tsv(os.path.join(tmp, f'{key}.tsv')))
+            for key in dm.SETS)
+    import plot_divided_mass as pdm
+    labels = OrderedDict((k, s['label']) for k, s in dm.SETS.items())
+    panels, _, key = pdm.robust_panels(tables, labels, dm.HEADLINE, 2)
+    # _fake_divided_dir's two robust splits, best worst-case first
+    expected_names = {sb.partition_name((16,)), sb.partition_name((2, 5, 16))}
+    assert [row[0] for row in key] == [1, 2], key
+    assert {row[1] for row in key} == expected_names, key
+    for pts in panels.values():
+        texts = sorted(p['text'] for p in pts if p['text'])
+        assert texts == ['1', '2'], texts
+    print('test_robust_panels_labels_by_rank passed')
+
+
+def test_robust_legend_lists_every_top_name():
+    """F2 regression: the legend cell keeps every top-N split's name and
+    classes (the spec calls them 'labelled by name'), even though the
+    panel itself now only shows their rank."""
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from matplotlib.legend import Legend
+
+    import plot_divided_mass as pdm
+
+    with tempfile.TemporaryDirectory() as tmp:
+        _fake_divided_dir(tmp)
+        tables = OrderedDict(
+            (key, dm.read_tsv(os.path.join(tmp, f'{key}.tsv')))
+            for key in dm.SETS)
+        flat = dm.read_tsv(os.path.join(tmp, 'flat.tsv'))
+    labels = OrderedDict((k, s['label']) for k, s in dm.SETS.items())
+    stars = pdm.flat_stars(flat, dm.HEADLINE)
+    _, _, key_rows = pdm.robust_panels(tables, labels, dm.HEADLINE, 2)
+
+    captured = {}
+    orig_save = pdm.save
+    pdm.save = lambda fig, stem: captured.setdefault('fig', fig)
+    try:
+        pdm.bubble_robust(tables, labels, dm.HEADLINE, 2, 'x', 'y', 'stem',
+                          stars)
+    finally:
+        pdm.save = orig_save
+    legend_ax = captured['fig'].axes[3]  # axes[1, 1], the legend cell
+    texts = [t.get_text() for t in legend_ax.texts]
+    for child in legend_ax.get_children():
+        if isinstance(child, Legend):
+            texts += [t.get_text() for t in child.get_texts()]
+    blob = '\n'.join(texts)
+    assert key_rows, key_rows
+    for _, name, _ in key_rows:
+        assert name in blob, (name, blob)
+    plt.close(captured['fig'])
+    print('test_robust_legend_lists_every_top_name passed')
+
+
+def test_foreground_limits_ignores_far_background_points():
+    """F3 regression: bubble_robust's axis limits must come from the
+    robust bubbles and the flat-MSP star alone, not the background splits
+    -- one of which can sit many decades below them, as in the review
+    finding (bubble_robust_0.05.png's Cetran panel, squeezed into the top
+    by a single background point at 6e-5 %)."""
+    import plot_divided_mass as pdm
+
+    panels = OrderedDict([('Cetran', [
+        dict(x=1.0, y=10.0, value=15.0, text='1'),
+        dict(x=3.0, y=40.0, value=20.0, text='2'),
+    ])])
+    stars = {'Cetran': (15.0, 80.0)}
+    background_y = 6e-5  # the review finding's stray background point
+    xlim, ylim = pdm.foreground_limits(panels, stars)
+    assert ylim[0] > 100 * background_y, ylim
+    # contrast: folding the same background point into the limits (what
+    # bubble_grid's own default computation does, and what bubble_robust
+    # used to rely on) drags the lower limit far below it
+    naive = pdm.log_limits([p['y'] for pts in panels.values() for p in pts]
+                           + [v for _, v in stars.values()] + [background_y])
+    assert naive[0] < ylim[0], (naive, ylim)
+    print('test_foreground_limits_ignores_far_background_points passed')
+
+
+def test_bubble_grid_draws_notes_only_in_their_own_panel():
+    """F5 regression: plot_ood_class_resemblance.py's feature_bubbles used
+    to keep its own copy of bubble_grid's 2 x 2 layout only to draw a
+    per-panel note; bubble_grid now takes the note itself, so there is one
+    layout, not two that can drift apart."""
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    import plot_divided_mass as pdm
+
+    panels = OrderedDict([
+        ('Cetran', [dict(x=1.0, y=2.0, value=5.0, text='car')]),
+        ('Test', [dict(x=1.0, y=2.0, value=-5.0, text='truck')]),
+        ('Test + Cetran', [dict(x=1.0, y=2.0, value=5.0, text='bus')]),
+    ])
+    note = 'not measured (no ID samples): 3 classes'
+    captured = {}
+    orig_save = pdm.save
+    pdm.save = lambda fig, stem: captured.setdefault('fig', fig)
+    try:
+        pdm.bubble_grid(panels, 'x', 'y', 'stem', notes={'Cetran': note})
+    finally:
+        pdm.save = orig_save
+    axes = captured['fig'].axes
+    matches = [[t for t in ax.texts if t.get_text() == note]
+              for ax in axes[:3]]
+    assert len(matches[0]) == 1, matches  # Cetran is panel (a), axes[0, 0]
+    assert matches[1] == [] and matches[2] == [], matches
+    plt.close(captured['fig'])
+    print('test_bubble_grid_draws_notes_only_in_their_own_panel passed')
+
+
 if __name__ == '__main__':
     test_figures_are_written()
     test_labels_do_not_overlap_when_there_is_room()
     test_dense_singletons_fit_and_refine_does_not_worsen_overlap()
+    test_labels_are_drawn_above_every_bubble()
+    test_robust_panels_labels_by_rank()
+    test_robust_legend_lists_every_top_name()
+    test_foreground_limits_ignores_far_background_points()
+    test_bubble_grid_draws_notes_only_in_their_own_panel()
     print('ALL TESTS PASSED')

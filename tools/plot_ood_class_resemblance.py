@@ -209,36 +209,16 @@ def feature_panels(labels, profiles):
 
 def feature_bubbles(labels, profiles, stem):
     """The feature-space twin of plot_divided_mass.py's bubble_singletons
-    (see feature_panels for the skip rule). This reimplements
-    pdm.bubble_grid's 2 x 2 layout from its own public pieces instead of
-    calling it directly: a panel that skipped any class also needs a
-    small note drawn inside its own axes, and bubble_grid saves and
-    closes its figure internally, with no hook and no returned axes to
-    add one afterwards."""
+    (see feature_panels for the skip rule): pdm.bubble_grid itself, with a
+    note in every panel that left classes out (F5 -- this used to keep its
+    own copy of bubble_grid's 2 x 2 layout only for that note; bubble_grid
+    now takes it directly, so there is one layout, not two that can
+    drift apart)."""
     panels, skipped = feature_panels(labels, profiles)
-    xs = [p['x'] for pts in panels.values() for p in pts]
-    ys = [p['y'] for pts in panels.values() for p in pts]
-    xlim, ylim = pdm.log_limits(xs), pdm.log_limits(ys)
-    fig, axes = plt.subplots(2, 2, figsize=(7.0, 7.6))
-    fig.subplots_adjust(left=0.09, right=0.97, top=0.94, bottom=0.07,
-                        wspace=0.24, hspace=0.32)
-    cells = (axes[0, 0], axes[0, 1], axes[1, 0])
-    labelled, zeros = [], False
-    for i, (ax, (label, points)) in enumerate(zip(cells, panels.items())):
-        labelled.append((ax, pdm.bubble_panel(ax, points, xlim, ylim)))
-        zeros = zeros or any(p['x'] <= 0 or p['y'] <= 0 for p in points)
-        ax.set_title(f'({"abc"[i]}) {label}', loc='left')
-        ax.set_xlabel('ID feature-divided (%)')
-        if i != 1:
-            ax.set_ylabel('OOD feature-divided (%)')
-        if skipped[label]:
-            ax.text(0.97, 0.03, 'not measured (no ID samples): '
-                    + f'{skipped[label]} classes', transform=ax.transAxes,
-                    ha='right', va='bottom', fontsize=6, color='0.5')
-    for ax, items in labelled:
-        pdm.place_labels(ax, items)
-    pdm.legend_cell(axes[1, 1], zeros=zeros)
-    pdm.save(fig, stem)
+    notes = {label: f'not measured (no ID samples): {n} classes'
+            for label, n in skipped.items() if n}
+    pdm.bubble_grid(panels, 'ID feature-divided (%)',
+                    'OOD feature-divided (%)', stem, notes=notes)
 
 
 def hypothesis_figure(labels, splits, rho, space, stem):

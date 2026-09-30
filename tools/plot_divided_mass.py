@@ -13,11 +13,13 @@ in a 2 x 2 grid whose fourth cell holds the legends.
                                 with flat MSP at the same threshold (star) and
                                 the iso-ratio diagonal through it: a split
                                 above it has a higher OOD:ID ratio than flat
-    bubble_robust_<delta>       the same axes for the robust splits
-                                (improvement > 0 on every set) over every
-                                other split in grey; the --top robust splits
-                                by worst-set improvement carry their names
-                                (their classes are in robust.tsv)
+    bubble_robust_<delta>       the same axes, limited to the robust
+                                bubbles and the flat-MSP star (over every
+                                other split in grey, which can range far
+                                outside that box); the --top robust splits
+                                by worst-set improvement are labelled by
+                                rank, keyed to their names and classes in
+                                the legend cell (also in robust.tsv)
     rho_vs_threshold            Spearman rho of each divided statistic
                                 against each metric delta, over the
                                 thresholds
@@ -29,6 +31,7 @@ import argparse
 import math
 import os.path as osp
 import sys
+import textwrap
 from collections import OrderedDict
 
 import matplotlib
@@ -68,12 +71,18 @@ GAIN, DROP, NA = '#0072B2', '#D55E00', '#8C8C8C'  # Okabe-Ito
 GAIN_TXT, DROP_TXT = '#00507D', '#A34700'  # darker shades for label text
 AREA_PER_UNIT = 12  # marker area (pt^2) per unit of |improvement|
 SIZE_KEY = (5, 20, 40)
-STAT_STYLE = OrderedDict([  # rho_vs_threshold: one colour per statistic
+STAT_STYLE = OrderedDict([  # rho_vs_threshold: one colour per statistic,
+                            # drawn in this order; log_ratio last (F4: it
+                            # ranks like precision, so it must sit on top,
+                            # not the reverse) and thin, see LOG_RATIO_*
     ('ood_div', ('#0072B2', 'OOD divided %')),
     ('id_div', ('#D55E00', 'ID divided %')),
-    ('log_ratio', ('#009E73', 'log OOD/ID divided ratio')),
     ('precision', ('#CC79A7', 'divided precision')),
+    ('log_ratio', ('#009E73', 'log OOD/ID divided ratio (ranks like '
+                   'divided precision)')),
 ])
+LOG_RATIO_LS = {'single': (0, (1, 1.2)), 'all': (0, (5, 1.5, 1, 1.5))}
+LOG_RATIO_LW = 0.6  # thinner than the other statistics' 1.0 (F4)
 TARGET_LABELS = OrderedDict([
     ('d_auroc', r'$\Delta$AUROC'), ('d_ap', r'$\Delta$AP'),
     ('d_fpr95', r'$\Delta$FPR@95'), ('improvement', 'improvement')])
@@ -85,6 +94,21 @@ LABEL_ANGLES = (0, 180, 90, 270, 45, 135, 225, 315,
 LABEL_GAPS = (0.0, 6.0, 12.0, 20.0, 30.0)
 _FIG_FIT_TOL = 1e-6  # a candidate box spilling less than this still "fits"
 _STAR_SIZE = 70  # bubble_panel's scatter ``s`` for the flat-MSP star
+# F1: a bubble's zorder is 3 + its rank among the panel's points (largest
+# first), so a panel of more than a handful of points reached the labels'
+# old zorder of 10. LABEL_ZORDER sits above every bubble a panel can ever
+# have (at most NUM_CLASSES of them, the singleton panels' size).
+LABEL_ZORDER = 1000
+# F2: legend_cell's rank -> name: classes key for bubble_robust. bubble_
+# robust's colour key always carries the star and background entries
+# ('flat MSP at the same threshold', 'same OOD:ID ratio as flat MSP',
+# 'other splits'), which are already too wide to fit beside the key at a
+# readable size regardless of how many splits the key itself lists -- so
+# the key always takes the cell's upper band, wrapped at
+# ROBUST_KEY_WRAP_CHARS, and the colour/size keys shrink into the corners
+# below it.
+ROBUST_KEY_FONTSIZE = 6.0
+ROBUST_KEY_WRAP_CHARS = 60
 
 
 def tint(colour, k=0.35):
@@ -153,8 +177,9 @@ def _annotate(ax, item, angle, gap, fontsize, leader, renderer):
     ann = ax.annotate(item['text'], (item['x'], item['y']), xytext=(dx, dy),
                       textcoords='offset points', ha=ha, va=va,
                       multialignment=ha, color=item['colour'],
-                      fontsize=fontsize, linespacing=1.05, zorder=10,
-                      arrowprops=arrow, annotation_clip=False)
+                      fontsize=fontsize, linespacing=1.05,
+                      zorder=LABEL_ZORDER, arrowprops=arrow,
+                      annotation_clip=False)
     # A freshly created annotation's own position is not yet resolved against
     # the current transform, so get_window_extent() on it would read back a
     # stale/placeholder box (e.g. anchored near the origin) until something
@@ -283,8 +308,13 @@ def bubble_panel(ax, points, xlim, ylim, star=None, background=None):
     Returns the label items for :func:`place_labels`."""
     format_log_axes(ax, xlim, ylim)
     if background:
-        ax.scatter([max(x, xlim[0]) for x, _ in background],
-                   [max(y, ylim[0]) for _, y in background],
+        # F3: unlike the foreground bubbles below, a background dot is
+        # never pinned to the axis floor -- outside xlim/ylim it is simply
+        # clipped (the scatter's default clip_on=True), so a split far
+        # below the chosen limits (bubble_robust's limits cover only the
+        # robust bubbles and the star, not the background) does not read
+        # as though it sat on the axis.
+        ax.scatter([x for x, _ in background], [y for _, y in background],
                    s=4, color='0.78', linewidths=0, zorder=1)
     if star is not None:
         x0, y0 = star
@@ -316,8 +346,29 @@ def _bubble_handle(colour, value, face=True):
                   markeredgecolor=colour, markeredgewidth=1.0)
 
 
-def legend_cell(ax, star=False, background=False, zeros=False):
-    """The fourth cell of the grid: colour, marker and size keys."""
+def _wrap_robust_key(robust, width):
+    """``robust`` ([(rank, name, classes)]) as 'k  name: classes' lines,
+    each entry wrapped to ``width``. ``break_long_words`` and
+    ``break_on_hyphens`` are off: a name or a class has no whitespace of
+    its own, so breaking inside one would make it unsearchable as a whole
+    string in the rendered key."""
+    lines = []
+    for rank, name, classes in robust:
+        lines += textwrap.wrap(f'{rank}  {name}: {classes}', width,
+                               subsequent_indent='    ',
+                               break_long_words=False,
+                               break_on_hyphens=False) or ['']
+    return lines
+
+
+def legend_cell(ax, star=False, background=False, zeros=False, robust=None):
+    """The fourth cell of the grid: colour, marker and size keys, plus,
+    when ``bubble_robust`` names its top-N splits by rank (F2), the
+    rank -> name: classes key (``robust``: [(rank, name, classes)], best
+    worst-case first) in the cell's upper band, with the colour and size
+    keys shrunk into the corners below it (see ROBUST_KEY_WRAP_CHARS for
+    why there is no alternative, more compact layout) -- the figure size
+    never changes."""
     ax.axis('off')
     handles = [_bubble_handle(GAIN, 10), _bubble_handle(DROP, 10)]
     labels = ['improvement > 0', 'improvement < 0']
@@ -334,29 +385,59 @@ def legend_cell(ax, star=False, background=False, zeros=False):
         handles.append(Line2D([], [], ls='none', marker='o', markersize=2.5,
                               color='0.78'))
         labels.append('other splits')
-    first = ax.legend(handles, labels, loc='upper left', frameon=False,
-                      handletextpad=0.5, borderaxespad=0.2)
+    size_handles = [_bubble_handle('0.4', v, face=False) for v in SIZE_KEY]
+    size_labels = [str(v) for v in SIZE_KEY]
+    size_title = '|improvement| (bubble area)'
+
+    if not robust:
+        first = ax.legend(handles, labels, loc='upper left', frameon=False,
+                          handletextpad=0.5, borderaxespad=0.2)
+        ax.add_artist(first)
+        ax.legend(size_handles, size_labels, title=size_title,
+                  loc='lower left', ncol=len(SIZE_KEY), frameon=False,
+                  handlelength=3.2, handleheight=3.2, columnspacing=1.0,
+                  borderaxespad=0.2)
+        return
+
+    # The key takes the cell's upper band, and the colour / size keys
+    # shrink into the lower corners (F2's fallback layout -- see
+    # ROBUST_KEY_WRAP_CHARS).
+    lines = _wrap_robust_key(robust, ROBUST_KEY_WRAP_CHARS)
+    ax.text(0.0, 0.98, '\n'.join(lines), transform=ax.transAxes, ha='left',
+            va='top', fontsize=ROBUST_KEY_FONTSIZE, linespacing=1.25)
+    first = ax.legend(handles, labels, loc='lower left', frameon=False,
+                      handletextpad=0.4, borderaxespad=0.15, fontsize=5.5)
     ax.add_artist(first)
-    ax.legend([_bubble_handle('0.4', v, face=False) for v in SIZE_KEY],
-              [str(v) for v in SIZE_KEY], title='|improvement| (bubble area)',
-              loc='lower left', ncol=len(SIZE_KEY), frameon=False,
-              handlelength=3.2, handleheight=3.2, columnspacing=1.0,
-              borderaxespad=0.2)
+    ax.legend(size_handles, size_labels, title=size_title, loc='lower right',
+              ncol=1, frameon=False, handlelength=2.0, handleheight=2.0,
+              columnspacing=0.6, borderaxespad=0.15, fontsize=5.5,
+              title_fontsize=5.5)
 
 
-def bubble_grid(panels, xlabel, ylabel, stem, stars=None, backgrounds=None):
+def bubble_grid(panels, xlabel, ylabel, stem, stars=None, backgrounds=None,
+                notes=None, xlim=None, ylim=None, robust_key=None):
     """2 x 2 figure: one bubble panel per set (panels: label -> points) and
-    a legend cell; the log axes are the same in every panel."""
-    stars, backgrounds = stars or {}, backgrounds or {}
-    xs = [p['x'] for pts in panels.values() for p in pts]
-    ys = [p['y'] for pts in panels.values() for p in pts]
-    for x, y in stars.values():
-        xs.append(x)
-        ys.append(y)
-    for points in backgrounds.values():
-        xs += [x for x, _ in points]
-        ys += [y for _, y in points]
-    xlim, ylim = log_limits(xs), log_limits(ys)
+    a legend cell; the log axes are the same in every panel.
+
+    ``xlim`` / ``ylim`` override the default axis limits (every panel's
+    points, plus ``stars`` and ``backgrounds``) when given -- e.g.
+    :func:`bubble_robust` passes the robust-only limits from
+    :func:`foreground_limits` (F3), so the background dots cannot stretch
+    them. ``notes``: label -> a short string drawn inside that panel's own
+    axes (F5, e.g. plot_ood_class_resemblance.py's skipped-class count).
+    ``robust_key``: forwarded to :func:`legend_cell` (F2)."""
+    stars, backgrounds, notes = stars or {}, backgrounds or {}, notes or {}
+    if xlim is None or ylim is None:
+        xs = [p['x'] for pts in panels.values() for p in pts]
+        ys = [p['y'] for pts in panels.values() for p in pts]
+        for x, y in stars.values():
+            xs.append(x)
+            ys.append(y)
+        for points in backgrounds.values():
+            xs += [x for x, _ in points]
+            ys += [y for _, y in points]
+        xlim = log_limits(xs) if xlim is None else xlim
+        ylim = log_limits(ys) if ylim is None else ylim
     fig, axes = plt.subplots(2, 2, figsize=(7.0, 7.6))
     fig.subplots_adjust(left=0.09, right=0.97, top=0.94, bottom=0.07,
                         wspace=0.24, hspace=0.32)
@@ -372,10 +453,13 @@ def bubble_grid(panels, xlabel, ylabel, stem, stars=None, backgrounds=None):
         ax.set_xlabel(xlabel)
         if i != 1:
             ax.set_ylabel(ylabel)
+        if notes.get(label):
+            ax.text(0.97, 0.03, notes[label], transform=ax.transAxes,
+                    ha='right', va='bottom', fontsize=6, color='0.5')
     for ax, items, star in labelled:
         place_labels(ax, items, star=star)
     legend_cell(axes[1, 1], star=bool(stars), background=bool(backgrounds),
-                zeros=zeros)
+                zeros=zeros, robust=robust_key)
     save(fig, stem)
 
 
@@ -405,26 +489,62 @@ def singleton_panels(tables, labels, threshold):
 
 
 def robust_panels(tables, labels, threshold, top):
-    """Robust splits as bubbles (the ``top`` by worst-set improvement named)
-    and every other split as a grey background dot."""
+    """Robust splits as bubbles and every other split as a grey background
+    dot. The ``top`` splits by worst-set improvement are labelled by rank
+    (F2: their names are too long and too dense to label the panel with
+    directly), best worst-case first. Returns (panels, backgrounds, key:
+    [(rank, name, classes)] for legend_cell's robust key)."""
     key = dm.delta_key(threshold)
-    worst = {}
+    worst, group_a = {}, {}
     for rows in tables.values():
         for r in rows:
             if r['robust']:
                 worst[r['name']] = min(worst.get(r['name'], float('inf')),
                                        r['improvement'])
-    named = set(sorted(worst, key=lambda n: -worst[n])[:top])
+                group_a[r['name']] = r['group_A']
+    ranked = sorted(worst, key=lambda n: -worst[n])[:top]
+    rank_of = {name: i + 1 for i, name in enumerate(ranked)}
     panels, backgrounds = OrderedDict(), OrderedDict()
     for k, rows in tables.items():
         panels[labels[k]] = [
             dict(x=r[f'id_div@{key}'], y=r[f'ood_div@{key}'],
                  value=r['improvement'],
-                 text=r['name'] if r['name'] in named else None)
+                 text=(str(rank_of[r['name']]) if r['name'] in rank_of
+                       else None))
             for r in rows if r['robust']]
         backgrounds[labels[k]] = [(r[f'id_div@{key}'], r[f'ood_div@{key}'])
                                   for r in rows if not r['robust']]
-    return panels, backgrounds
+    return (panels, backgrounds,
+            [(rank_of[n], n, group_a[n]) for n in ranked])
+
+
+def foreground_limits(panels, stars=None):
+    """(xlim, ylim) from the bubbles in ``panels`` and ``stars`` alone --
+    what :func:`bubble_robust` hands ``bubble_grid`` (F3). The background
+    splits it also draws span down to a fraction of a percent; including
+    them in the shared log limits squeezed the robust bubbles into the top
+    of the panel."""
+    stars = stars or {}
+    xs = [p['x'] for pts in panels.values() for p in pts]
+    ys = [p['y'] for pts in panels.values() for p in pts]
+    for x, y in stars.values():
+        xs.append(x)
+        ys.append(y)
+    return log_limits(xs), log_limits(ys)
+
+
+def bubble_robust(tables, labels, threshold, top, xlabel, ylabel, stem,
+                  stars):
+    """The robust-splits figure: :func:`robust_panels`' bubbles (labelled
+    by rank) over every other split in grey, axis limits from the robust
+    bubbles and the flat-MSP star alone (F3), and the rank -> name: classes
+    key in the legend cell (F2)."""
+    panels, backgrounds, robust_key = robust_panels(tables, labels,
+                                                     threshold, top)
+    xlim, ylim = foreground_limits(panels, stars)
+    bubble_grid(panels, xlabel, ylabel, stem, stars=stars,
+                backgrounds=backgrounds, xlim=xlim, ylim=ylim,
+                robust_key=robust_key)
 
 
 def rho_figure(rho, labels, stem):
@@ -443,8 +563,20 @@ def rho_figure(rho, labels, stem):
                         if r['set'] == key and r['target'] == target
                         and r['statistic'] == stat
                         and r['population'] == population)
-                    ax.plot([d for d, _ in pts], [v for _, v in pts], ls=ls,
-                            color=colour, lw=1.0, marker='o', markersize=2.2)
+                    d, v = [d for d, _ in pts], [v for _, v in pts]
+                    if stat == 'log_ratio':
+                        # F4: within one set, log_ratio ranks the splits
+                        # almost exactly like precision (up to the +0.5
+                        # continuity correction), so its rho coincides with
+                        # precision's; drawn thinner, on top (STAT_STYLE
+                        # puts it after precision) and dashed its own way,
+                        # it still shows where the two differ.
+                        ax.plot(d, v, ls=LOG_RATIO_LS[population],
+                                color=colour, lw=LOG_RATIO_LW, marker='o',
+                                markersize=1.6)
+                    else:
+                        ax.plot(d, v, ls=ls, color=colour, lw=1.0,
+                                marker='o', markersize=2.2)
             ax.axhline(0.0, color='0.5', lw=0.5)
             ax.set_xscale('log')
             ax.set_ylim(-1.05, 1.05)
@@ -491,11 +623,8 @@ def main():
     bubble_grid(singleton_panels(tables, labels, args.threshold), xlabel,
                 ylabel, osp.join(args.divided_dir, f'bubble_singletons_{key}'),
                 stars=stars)
-    panels, backgrounds = robust_panels(tables, labels, args.threshold,
-                                        args.top)
-    bubble_grid(panels, xlabel, ylabel,
-                osp.join(args.divided_dir, f'bubble_robust_{key}'),
-                stars=stars, backgrounds=backgrounds)
+    bubble_robust(tables, labels, args.threshold, args.top, xlabel, ylabel,
+                  osp.join(args.divided_dir, f'bubble_robust_{key}'), stars)
     rho_figure(rho, labels, osp.join(args.divided_dir, 'rho_vs_threshold'))
 
 
