@@ -9,8 +9,8 @@ L2-normalises the features (as the kNN of tools/ood_class_resemblance.py),
 reduces them to 50 dimensions with PCA and embeds them with t-SNE
 (perplexity 30, PCA initialisation, --seed). One panel per set: ID points
 in their class's fixed colour (CLASS_COLOURS), OOD points black on top
-(triangle = Stop, cross = Others), each class's name at the median of its
-points, and a legend below. t-SNE keeps neighbourhoods, not distances
+(triangle = Stop, cross = Others), each class's name on its main cluster,
+and a legend below. t-SNE keeps neighbourhoods, not distances
 between clusters or cluster sizes: the figure illustrates the kNN
 measures, it is not evidence on its own.
 
@@ -94,10 +94,23 @@ def embed(features, seed=0, perplexity=30.0):
                 random_state=seed).fit_transform(x)
 
 
+def label_position(xy, members, k=20):
+    """Where to write a class's name: its point with the most same-class
+    points among its k nearest neighbours in the embedding, i.e. a spot on
+    the class's main cluster (the median of a class spread over several
+    clusters can fall between them, where the class has no points)."""
+    pts = xy[members]
+    k = min(k, len(xy) - 1)
+    d = ((pts[:, None, :] - xy[None, :, :]) ** 2).sum(axis=-1)
+    nearest = np.argpartition(d, k, axis=1)[:, :k + 1]  # includes the point
+    same = np.isin(nearest, members).sum(axis=1)
+    return pts[int(np.argmax(same))]
+
+
 def tsne_figure(panels, stem):
     """One panel per set (panels: title -> (xy, label, raw, ood)): ID points
-    in their class colour, OOD points black on top, class names at the
-    class medians, a legend below grouped by family."""
+    in their class colour, OOD points black on top, class names on their
+    main clusters, a legend below grouped by family."""
     fig, axes = plt.subplots(1, len(panels), figsize=(7.0, 3.5),
                              squeeze=False)
     for ax, (title, (xy, label, raw, ood)) in zip(axes[0], panels.items()):
@@ -113,7 +126,7 @@ def tsne_figure(panels, stem):
         for c, name in enumerate(sb.CLASSES):
             sel = (label == c) & ~ood
             if sel.sum() >= 5:
-                mx, my = np.median(xy[sel], axis=0)
+                mx, my = label_position(xy, np.flatnonzero(sel))
                 ax.text(mx, my, name, fontsize=4.8, ha='center', va='center',
                         color=CLASS_COLOURS[name], zorder=6,
                         path_effects=[pe.withStroke(linewidth=1.4,

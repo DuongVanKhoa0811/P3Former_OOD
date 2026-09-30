@@ -53,7 +53,27 @@ def test_tsne_figure_smoke():
     print('test_tsne_figure_smoke passed')
 
 
+def test_label_position_picks_the_main_cluster():
+    rng = np.random.RandomState(0)
+    # Class 0: dense cluster near (0, 0) with 30 points, sparse cluster near (10, 10) with 10 points
+    cluster_0_main = 0.1 * rng.randn(30, 2)
+    cluster_0_sparse = (10, 10) + 0.1 * rng.randn(10, 2)
+    class_0 = np.vstack([cluster_0_main, cluster_0_sparse])
+    # Class 1: 30 points near (5, -5)
+    class_1 = (5, -5) + 0.1 * rng.randn(30, 2)
+    xy = np.vstack([class_0, class_1])
+    members = np.arange(40)  # indices of class 0 (30 + 10)
+    label = tsne.label_position(xy, members)
+    # Assert label lies within 1.0 of (0, 0), where the main cluster is
+    assert np.linalg.norm(label) < 1.0, f'label {label} is too far from (0, 0)'
+    # Assert label is one of class 0's points
+    assert np.any(np.all(np.abs(class_0 - label) < 0.15, axis=1)), \
+        f'label {label} is not in class 0'
+    print('test_label_position_picks_the_main_cluster passed')
+
+
 if __name__ == '__main__':
     test_class_colours()
     test_tsne_figure_smoke()
+    test_label_position_picks_the_main_cluster()
     print('ALL TESTS PASSED')
