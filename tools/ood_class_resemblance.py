@@ -25,13 +25,27 @@ classes, against the split's own ID points:
   the OOD points resemble together on one side (improvement ~ R_A, E_A)
   and for the alternative that it cuts through them (improvement ~ the OOD
   feature-divided share).
+- the literal reading of that hypothesis: for the k classes the OOD points
+  resemble most (the largest r_OOD), whether each split puts all of them
+  on the smaller side, all on the larger side, or cuts through them, and
+  the improvement of each group of splits.
 
 Two feature spaces: ``full`` (what the classifier sees) and ``appearance``
 (feat - pos, without the added positional embedding).
 
+``--reference SET`` draws the bank, the ID queries and the class
+populations from another set's ID samples instead of each evaluated set's
+own: some classes have no ID points at all in a given set (ten of
+Cetran's 24, in the real dump) and so cannot be measured against that
+set's own bank. The evaluated set's OOD points are always its own; only
+the bank they are compared to, and the ID queries and populations that go
+with it, move to the reference set.
+
 Outputs in --out-dir (default <root>/resemblance):
     profile_<set>_<space>.tsv   one row per class
     splits_<set>_<space>.tsv    one row per split
+    placement.tsv               one row per (set, space, k, position) of
+                                 the literal-reading test
     rho.tsv                     Spearman correlations, long format
     summary.md                  banks, hypotheses, profiles, robust splits
 
@@ -39,6 +53,9 @@ Run from the repo root after tools/divided_mass.py (minutes on a GPU):
     python tools/ood_class_resemblance.py --device cuda:0
     python tools/ood_class_resemblance.py --device cuda:0 --k 50 \\
         --out-dir work_dirs/p3former_2xb1_3x_dso_ood_dump/resemblance_k50
+    python tools/ood_class_resemblance.py --device cuda:0 \\
+        --reference test_cetran \\
+        --out-dir work_dirs/p3former_2xb1_3x_dso_ood_dump/resemblance_xref
     python tools/plot_ood_class_resemblance.py
 """
 import argparse
@@ -268,7 +285,58 @@ def alignment(set_key, space, k, profile, splits):
     return out
 
 
-def write_summary(path, sets, references, profiles, split_tables, rho, k):
+def placement_rows(profile, splits, set_key, space, ks=(2, 3)):
+    """The literal reading of the hypothesis: for S_k, the k classes with
+    the largest finite r_ood (ties broken by class id), where each split's
+    smaller group A (``subset_of(name)``) puts them -- 'small side' (all of
+    S_k in A), 'large side' (none of S_k in A) or 'apart' (the boundary
+    separates them) -- and the improvement of each group. One row per (k,
+    position), small side first, then large side, then apart; NaN
+    median/positive and '' best when a position holds no split."""
+    name_to_id = {name: c for c, name in enumerate(sb.CLASSES)}
+    ranked = sorted(((r['r_ood'], name_to_id[r['class']]) for r in profile
+                    if not np.isnan(r['r_ood'])), key=lambda t: (-t[0], t[1]))
+    rows = []
+    for k in ks:
+        top = [cid for _, cid in ranked[:k]]
+        top_set = set(top)
+        classes = ', '.join(sb.CLASSES[c] for c in top)
+        buckets = OrderedDict([('small side', []), ('large side', []),
+                               ('apart', [])])
+        for r in splits:
+            a = set(subset_of(r['name']))
+            if top_set <= a:
+                position = 'small side'
+            elif not (top_set & a):
+                position = 'large side'
+            else:
+                position = 'apart'
+            buckets[position].append(r)
+        for position, members in buckets.items():
+            n = len(members)
+            if n:
+                values = [r['improvement'] for r in members]
+                median = float(np.median(values))
+                positive = 100.0 * sum(1 for v in values if v > 0) / n
+                best_row = max(members, key=lambda r: r['improvement'])
+                best = best_row['name']
+                best_improvement = best_row['improvement']
+            else:
+                median = positive = best_improvement = float('nan')
+                best = ''
+            rows.append(OrderedDict([
+                ('set', set_key), ('space', space), ('k', k),
+                ('classes', classes), ('position', position), ('n', n),
+                ('median', median), ('positive', positive), ('best', best),
+                ('best_improvement', best_improvement)]))
+    return rows
+
+
+def write_summary(path, sets, references, profiles, split_tables, rho, k,
+                  reference=None, placement=None):
+    ref_line = ("reference: each set's own ID samples" if reference is None
+               else 'reference: the ID samples of '
+               f"{SETS[reference]['label']} (all sets)")
     lines = [
         '# OOD resemblance to the ID classes, in the feature space', '',
         f'kNN, k = {k}, cosine similarity, against a class-balanced bank of '
@@ -276,18 +344,20 @@ def write_summary(path, sets, references, profiles, split_tables, rho, k):
         "OOD points' neighbours (100/24 = 4.17 % = no preference). r_ID(c): "
         'the same around the ID points of the other classes. contrast = '
         'r_OOD / r_ID. Feature-divided: the k neighbours hold classes of '
-        'both sides of a split.', '', '## Reference banks', '']
+        'both sides of a split.', '', ref_line, '', '## Reference banks', '']
+    bank_cols = ([(reference, next(iter(references.values())))]
+                if reference is not None else list(references.items()))
     rows = []
     for c in range(NUM_CLASSES):
         cells = [sb.CLASSES[c]]
-        for ref in references.values():
+        for _, ref in bank_cols:
             r = ref[c]
             cells.append(f'{r["samples"]} / {r["bank"]} / {r["queries"]}'
                          + (' (left out)' if r['excluded'] else ''))
         rows.append(cells)
     lines += dm.md_table(
         ['class'] + [f'{sets[key]["label"]}: samples / bank / queries'
-                     for key in references], rows)
+                     for key, _ in bank_cols], rows)
     lines += ['', '## Hypotheses: Spearman rho with the improvement, over '
               'all splits', '']
     rows = []
@@ -303,6 +373,30 @@ def write_summary(path, sets, references, profiles, split_tables, rho, k):
     lines += dm.md_table(
         ['set', 'space'] + [f'{name}: {x}' for name, xs in HYPOTHESES.items()
                             for x in xs], rows)
+    if placement is not None:
+        lines += ['', '## Hypothesis, literal reading: where the k '
+                  'most-resembled classes sit', '',
+                  'small side: all k classes in the smaller group A; '
+                  'large side: all of them in B with everything else; '
+                  'apart: the boundary separates them. Correlational, over '
+                  'the existing splits.', '']
+        by_key = OrderedDict()
+        for r in placement:
+            by_key.setdefault((r['set'], r['space'], r['k']),
+                              OrderedDict())[r['position']] = r
+        rows = []
+        for (set_key, space, kk), positions in by_key.items():
+            cells = [sets[set_key]['label'], space, kk,
+                    next(iter(positions.values()))['classes']]
+            for position in ('small side', 'large side', 'apart'):
+                p = positions[position]
+                cells += [p['n'], dm.fmt(p['median']), dm.pct(p['positive'])]
+            rows.append(cells)
+        lines += dm.md_table(
+            ['set', 'space', 'k', 'classes']
+            + [f'{pos}: {col}' for pos in ('small side', 'large side',
+                                           'apart') for col in
+               ('n', 'median', '% > 0')], rows)
     for (key, space), profile in profiles.items():
         lines += ['', f'## Profile, {sets[key]["label"]} ({space} space)', '']
         order = sorted(profile,
@@ -318,7 +412,16 @@ def write_summary(path, sets, references, profiles, split_tables, rho, k):
                  and r['space'] == space and r['population'] == 'classes'}
         ys = ('ood_div', 'id_div', 'improvement')
         xs = ('r_ood', 'r_id', 'contrast', 'feat_div_ood', 'feat_div_id')
-        lines += ['', 'Spearman rho over the 24 classes:', '']
+        # 'measured' = has a finite r_ood (present in the bank); n comes
+        # from the r_ood rho rows themselves, ranged if they disagree.
+        r_ood_n = [r['n'] for r in rho if r['set'] == key
+                  and r['space'] == space and r['population'] == 'classes'
+                  and r['x'] == 'r_ood']
+        n_lo, n_hi = min(r_ood_n), max(r_ood_n)
+        heading = (f'Spearman rho over the {n_lo} measured classes:'
+                  if n_lo == n_hi else 'Spearman rho over the '
+                  f'{n_lo}-{n_hi} measured classes:')
+        lines += ['', heading, '']
         lines += dm.md_table(['x'] + list(ys),
                              [[x] + [dm.fmt(table[(x, y)]) for y in ys]
                               for x in xs])
@@ -343,12 +446,34 @@ def write_summary(path, sets, references, profiles, split_tables, rho, k):
 # --------------------------------------------------------------------- main
 def run(sets, divided_dir, out_dir, k=10, bank_per_class=4000,
         query_per_class=2000, threshold=dm.HEADLINE, device='cuda:0', seed=0,
-        spaces=SPACES):
+        spaces=SPACES, reference=None):
     """Every output for ``sets`` (see :func:`resolve_sets`); returns
-    (profiles, split_tables, rho), the first two keyed by (set, space)."""
+    (profiles, split_tables, rho), the first two keyed by (set, space).
+
+    ``reference``: a key of ``sets`` whose ID samples are loaded once and
+    used, for every evaluated set, as the bank, the ID queries and the
+    class populations (see :func:`select_reference`, :func:`query_weights`);
+    the OOD queries always come from the evaluated set's own samples. With
+    ``reference=None`` (the default) every set uses its own ID samples, as
+    before."""
     os.makedirs(out_dir, exist_ok=True)
-    profiles, split_tables, references, rho = (OrderedDict(), OrderedDict(),
-                                               OrderedDict(), [])
+    profiles, split_tables, references, rho, placement = (
+        OrderedDict(), OrderedDict(), OrderedDict(), [], [])
+    shared = None
+    if reference is not None:
+        ref_samples = load_samples(sets[reference]['features'])
+        r_label, r_ood = ref_samples['label'], ref_samples['ood']
+        r_weight = ref_samples['weight']
+        bank, query, ref_table = select_reference(
+            r_label, r_ood, r_weight, bank_per_class, query_per_class,
+            np.random.default_rng(seed))
+        excluded = np.array([r['excluded'] == 1 for r in ref_table])
+        population = np.bincount(r_label[~r_ood], weights=r_weight[~r_ood],
+                                 minlength=NUM_CLASSES)[:NUM_CLASSES]
+        q_weight = query_weights(r_label[query], population)
+        shared = dict(samples=ref_samples, bank=bank, query=query,
+                      ref_table=ref_table, excluded=excluded,
+                      q_weight=q_weight)
     for key, spec in sets.items():
         t0 = time.time()
         divided = OrderedDict(
@@ -359,40 +484,52 @@ def run(sets, divided_dir, out_dir, k=10, bank_per_class=4000,
         a_mask = sb.subsets_to_mask(subsets)
         samples = load_samples(spec['features'])
         label, ood, weight = samples['label'], samples['ood'], samples['weight']
-        bank, query, reference = select_reference(
-            label, ood, weight, bank_per_class, query_per_class,
-            np.random.default_rng(seed))
-        references[key] = reference
-        excluded = np.array([r['excluded'] == 1 for r in reference])
-        population = np.bincount(label[~ood], weights=weight[~ood],
-                                 minlength=NUM_CLASSES)[:NUM_CLASSES]
         ood_index = np.flatnonzero(ood)
-        q_weight = query_weights(label[query], population)
+        if shared is None:
+            bank, query, ref_table = select_reference(
+                label, ood, weight, bank_per_class, query_per_class,
+                np.random.default_rng(seed))
+            excluded = np.array([r['excluded'] == 1 for r in ref_table])
+            population = np.bincount(label[~ood], weights=weight[~ood],
+                                     minlength=NUM_CLASSES)[:NUM_CLASSES]
+            q_weight = query_weights(label[query], population)
+            bank_samples = samples
+        else:
+            bank, query, ref_table = (shared['bank'], shared['query'],
+                                      shared['ref_table'])
+            excluded, q_weight = shared['excluded'], shared['q_weight']
+            bank_samples = shared['samples']
+        references[key] = ref_table
         for space in spaces:
-            ref = space_features(samples, space, bank)
+            ref = space_features(bank_samples, space, bank)
             ood_counts = knn_class_counts(
-                space_features(samples, space, ood_index), ref, label[bank],
-                k, device)
-            id_counts = knn_class_counts(space_features(samples, space, query),
-                                         ref, label[bank], k, device)
+                space_features(samples, space, ood_index), ref,
+                bank_samples['label'][bank], k, device)
+            id_counts = knn_class_counts(
+                space_features(bank_samples, space, query), ref,
+                bank_samples['label'][bank], k, device)
             profile = class_profile(ood_counts, weight[ood_index], id_counts,
-                                    label[query], q_weight, k, excluded)
+                                    bank_samples['label'][query], q_weight, k,
+                                    excluded)
             measures = split_measures(a_mask, profile[0], ood_counts,
                                       weight[ood_index], id_counts, q_weight,
                                       k)
             splits = split_rows(names, subsets, divided, measures, threshold)
-            prof = profile_rows(profile, reference, splits)
+            prof = profile_rows(profile, ref_table, splits)
             dm.write_tsv(osp.join(out_dir, f'profile_{key}_{space}.tsv'), prof)
             dm.write_tsv(osp.join(out_dir, f'splits_{key}_{space}.tsv'), splits)
             profiles[(key, space)] = prof
             split_tables[(key, space)] = splits
             rho += alignment(key, space, k, prof, splits)
+            placement += placement_rows(prof, splits, key, space)
         print(f'{spec["label"]}: {len(ood_index)} OOD / {int((~ood).sum())} '
               f'ID samples, bank {len(bank)}, {len(query)} ID queries '
               f'({time.time() - t0:.0f} s)', flush=True)
     dm.write_tsv(osp.join(out_dir, 'rho.tsv'), rho)
+    dm.write_tsv(osp.join(out_dir, 'placement.tsv'), placement)
     write_summary(osp.join(out_dir, 'summary.md'), sets, references, profiles,
-                  split_tables, rho, k)
+                  split_tables, rho, k, reference=reference,
+                  placement=placement)
     print(f'wrote {out_dir}')
     return profiles, split_tables, rho
 
@@ -415,6 +552,9 @@ def main():
                     help='divided-mass threshold the splits are compared at')
     ap.add_argument('--device', default='cuda:0')
     ap.add_argument('--seed', type=int, default=0)
+    ap.add_argument('--reference', choices=list(SETS), default=None,
+                    help="draw the bank and the ID queries from this set's "
+                    "samples instead of each set's own")
     args = ap.parse_args()
     if args.threshold not in dm.DELTAS:
         ap.error('--threshold must be one of '
@@ -424,7 +564,7 @@ def main():
         args.out_dir or osp.join(args.root, 'resemblance'), k=args.k,
         bank_per_class=args.bank_per_class,
         query_per_class=args.query_per_class, threshold=args.threshold,
-        device=args.device, seed=args.seed)
+        device=args.device, seed=args.seed, reference=args.reference)
 
 
 if __name__ == '__main__':

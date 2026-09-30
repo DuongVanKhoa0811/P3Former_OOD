@@ -94,6 +94,98 @@ def test_split_measures_match_brute_force():
     print('test_split_measures_match_brute_force passed')
 
 
+def test_split_measures_nan_r_ood():
+    rng = np.random.RandomState(4)
+    k = 10
+    counts = rng.multinomial(k, np.ones(C) / C, size=200).astype(np.int32)
+    weight = rng.uniform(0.5, 2.0, 200)
+    subsets = [(7, ), (0, 1, 2, 3, 4), tuple(range(12))]
+    mask = sb.subsets_to_mask(subsets)
+    r_ood = 100.0 * rng.dirichlet(np.ones(C))
+    baseline = res.split_measures(mask, r_ood, counts, weight, counts, weight,
+                                  k)
+    nan_r_ood = r_ood.copy()
+    nan_r_ood[7] = float('nan')  # class 7 excluded from the bank
+    R_A, E_A, fd_ood, fd_id = res.split_measures(
+        mask, nan_r_ood, counts, weight, counts, weight, k)
+    assert np.all(np.isfinite(R_A)) and np.all(np.isfinite(E_A))
+    want = r_ood.copy()
+    want[7] = 0.0  # the code counts a NaN r_ood as 0, not as missing
+    for s, subset in enumerate(subsets):
+        assert np.isclose(R_A[s], want[list(subset)].sum())
+        assert np.isclose(E_A[s], R_A[s] / (100.0 * len(subset) / C))
+    # the feature-divided shares are computed from counts/weight alone and
+    # must not change when r_ood does.
+    assert np.allclose(fd_ood, baseline[2]) and np.allclose(fd_id, baseline[3])
+    print('test_split_measures_nan_r_ood passed')
+
+
+def test_placement_rows():
+    resembled = {2: 40.0, 5: 30.0, 9: 20.0, 14: 10.0}  # descending r_ood
+    profile = [OrderedDict([('class', sb.CLASSES[c]),
+                            ('r_ood', resembled.get(c, float('nan')))])
+              for c in range(C)]
+
+    def row(subset, improvement):
+        return OrderedDict([
+            ('name', sb.partition_name(tuple(sorted(subset)))),
+            ('improvement', improvement)])
+
+    # S_2 = {2, 5}; S_3 = {2, 5, 9}.
+    splits = [
+        row((2, 5), 15.0),      # k=2: small side | k=3: apart
+        row((2, 3, 5), 25.0),   # k=2: small side | k=3: apart
+        row((9, 20), -10.0),    # k=2: large side | k=3: apart
+        row((1, 3), 5.0),       # k=2: large side | k=3: large side
+        row((2, ), -20.0),      # k=2: apart      | k=3: apart
+    ]
+    rows = res.placement_rows(profile, splits, 'test', 'full', ks=(2, 3))
+    by = {(r['k'], r['position']): r for r in rows}
+
+    s2 = f'{sb.CLASSES[2]}, {sb.CLASSES[5]}'
+    s3 = f'{sb.CLASSES[2]}, {sb.CLASSES[5]}, {sb.CLASSES[9]}'
+    for position in ('small side', 'large side', 'apart'):
+        assert by[(2, position)]['classes'] == s2
+        assert by[(3, position)]['classes'] == s3
+
+    small2 = by[(2, 'small side')]
+    assert small2['n'] == 2 and np.isclose(small2['median'], 20.0)
+    assert np.isclose(small2['positive'], 100.0)
+    assert small2['best'] == sb.partition_name((2, 3, 5))
+    assert np.isclose(small2['best_improvement'], 25.0)
+
+    large2 = by[(2, 'large side')]
+    assert large2['n'] == 2 and np.isclose(large2['median'], -2.5)
+    assert np.isclose(large2['positive'], 50.0)
+    assert large2['best'] == sb.partition_name((1, 3))
+    assert np.isclose(large2['best_improvement'], 5.0)
+
+    apart2 = by[(2, 'apart')]
+    assert apart2['n'] == 1 and np.isclose(apart2['median'], -20.0)
+    assert np.isclose(apart2['positive'], 0.0)
+    assert apart2['best'] == sb.partition_name((2, ))
+    assert np.isclose(apart2['best_improvement'], -20.0)
+
+    # the small side is empty at k=3: NaN median/positive, '' best.
+    small3 = by[(3, 'small side')]
+    assert small3['n'] == 0
+    assert np.isnan(small3['median']) and np.isnan(small3['positive'])
+    assert small3['best'] == '' and np.isnan(small3['best_improvement'])
+
+    large3 = by[(3, 'large side')]
+    assert large3['n'] == 1 and np.isclose(large3['median'], 5.0)
+    assert np.isclose(large3['positive'], 100.0)
+    assert large3['best'] == sb.partition_name((1, 3))
+    assert np.isclose(large3['best_improvement'], 5.0)
+
+    apart3 = by[(3, 'apart')]
+    assert apart3['n'] == 4 and np.isclose(apart3['median'], 2.5)
+    assert np.isclose(apart3['positive'], 50.0)
+    assert apart3['best'] == sb.partition_name((2, 3, 5))
+    assert np.isclose(apart3['best_improvement'], 25.0)
+    print('test_placement_rows passed')
+
+
 def test_reference_selection():
     label = np.concatenate([np.full(900, 0), np.full(20, 1), np.full(60, 2),
                             np.full(100, 24)])
@@ -109,9 +201,11 @@ def test_reference_selection():
     print('test_reference_selection passed')
 
 
-def _write_features(d, frames, rng, centres, dim=8):
+def _write_features(d, frames, rng, centres, dim=8, missing=None):
     """Feature samples as tools/extract_point_features.py writes them; the
-    OOD points sit next to class 16 (overhead-bridge)."""
+    OOD points sit next to class 16 (overhead-bridge). ``missing`` drops
+    that class's rows entirely (the OOD cluster stays at its centre), for a
+    set with no ID sample of one class."""
     os.makedirs(d)
     for f in range(frames):
         label = np.concatenate([np.repeat(np.arange(C), 20), np.full(30, 24)])
@@ -119,12 +213,16 @@ def _write_features(d, frames, rng, centres, dim=8):
         noise = 0.3 * rng.randn(len(label), dim)
         feat = np.where(ood[:, None], centres[16] + 0.4 + noise,
                         centres[np.minimum(label, C - 1)] + noise)
+        pos = (0.1 * rng.randn(len(label), dim)).astype(np.float16)
+        raw = np.where(ood, 17, 1).astype(np.int16)
+        if missing is not None:
+            keep = label != missing
+            label, feat, pos, raw, ood = (label[keep], feat[keep], pos[keep],
+                                          raw[keep], ood[keep])
         np.savez(os.path.join(d, f'f{f:06d}.npz'),
-                 feat=feat.astype(np.float16),
-                 pos=(0.1 * rng.randn(len(label), dim)).astype(np.float16),
+                 feat=feat.astype(np.float16), pos=pos,
                  logits=np.zeros((len(label), C), np.float16),
-                 label=label.astype(np.int16),
-                 raw=np.where(ood, 17, 1).astype(np.int16), ood=ood,
+                 label=label.astype(np.int16), raw=raw, ood=ood,
                  weight=np.ones(len(label), np.float32),
                  index=np.arange(len(label), dtype=np.int32),
                  lidar_path=f'x{f}', frame=f)
@@ -163,19 +261,104 @@ def test_run_end_to_end():
         assert abs(sum(r['r_ood'] for r in profile.values()) - 100.0) < 1e-6
         assert len(splits[('cetran', 'full')]) == len(subsets)
         assert len(rho) == 3 * 2 * (len(res.CLASS_PAIRS) + len(res.SPLIT_PAIRS))
+
+        placement = dm.read_tsv(os.path.join(out, 'placement.tsv'))
+        assert placement
+        by_combo = OrderedDict()
+        for r in placement:
+            by_combo.setdefault((r['set'], r['space'], r['k']),
+                                []).append(r)
+        for combo, rows_here in by_combo.items():
+            assert {r['position'] for r in rows_here} == {
+                'small side', 'large side', 'apart'}
+            assert sum(r['n'] for r in rows_here) == len(subsets), combo
+
         with open(os.path.join(out, 'summary.md')) as fh:
             text = fh.read()
         for section in ('## Reference banks', '## Hypotheses',
                         '## Profile, Test + Cetran (full space)',
-                        '## Robust splits, Cetran (full space)'):
+                        '## Robust splits, Cetran (full space)',
+                        '## Hypothesis, literal reading'):
             assert section in text, section
     print('test_run_end_to_end passed')
+
+
+def test_cross_set_reference():
+    rng = np.random.RandomState(5)
+    centres = 3.0 * rng.randn(C, 8)
+    with tempfile.TemporaryDirectory() as tmp:
+        root = os.path.join(tmp, 'root')
+        # Cetran has no ID sample of class 16 at all -- the real dump's
+        # situation for ten classes; the OOD cluster still sits at its
+        # centre. Test keeps every class, so Test + Cetran has all 24.
+        _write_features(os.path.join(root, 'features_cetran'), 3, rng,
+                        centres, missing=16)
+        _write_features(os.path.join(root, 'features_test'), 4, rng, centres)
+        divided = os.path.join(tmp, 'divided')
+        os.makedirs(divided)
+        subsets = sb.singleton_subsets() + [(12, 16), (0, 1, 2, 3, 4)]
+        for key in res.SETS:
+            dm.write_tsv(os.path.join(divided, f'{key}.tsv'), [
+                OrderedDict([
+                    ('name', sb.partition_name(s)), ('size_A', len(s)),
+                    ('group_A', ', '.join(sb.CLASSES[c] for c in s)),
+                    ('ood_div@0.05', float(rng.uniform(0, 50))),
+                    ('id_div@0.05', float(rng.uniform(0, 5))),
+                    ('improvement', float(rng.uniform(-30, 30))),
+                    ('robust', int(s == (16, )))]) for s in subsets])
+
+        sets = res.resolve_sets(root)
+        out_default = os.path.join(tmp, 'resemblance_default')
+        res.run(sets, divided, out_default, k=5, bank_per_class=40,
+               query_per_class=20, device='cpu')
+        out_none = os.path.join(tmp, 'resemblance_none')
+        res.run(sets, divided, out_none, k=5, bank_per_class=40,
+               query_per_class=20, device='cpu', reference=None)
+        out_xref = os.path.join(tmp, 'resemblance_xref')
+        res.run(sets, divided, out_xref, k=5, bank_per_class=40,
+               query_per_class=20, device='cpu', reference='test_cetran')
+
+        def profile_of(out_dir, key='cetran', space='full'):
+            return {r['class']: r for r in dm.read_tsv(
+                os.path.join(out_dir, f'profile_{key}_{space}.tsv'))}
+
+        default_profile = profile_of(out_default)
+        assert np.isnan(default_profile['overhead-bridge']['r_ood'])
+
+        xref_profile = profile_of(out_xref)
+        assert not np.isnan(xref_profile['overhead-bridge']['r_ood'])
+        assert max(xref_profile,
+                  key=lambda c: xref_profile[c]['r_ood']) == 'overhead-bridge'
+
+        # reference=None is exactly the no-argument behaviour.
+        with open(os.path.join(out_default,
+                               'profile_cetran_full.tsv')) as fh:
+            a = fh.read()
+        with open(os.path.join(out_none, 'profile_cetran_full.tsv')) as fh:
+            b = fh.read()
+        assert a == b
+
+        with open(os.path.join(out_default, 'summary.md')) as fh:
+            default_summary = fh.read()
+        with open(os.path.join(out_xref, 'summary.md')) as fh:
+            xref_summary = fh.read()
+        assert "reference: each set's own ID samples" in default_summary
+        assert ('reference: the ID samples of Test + Cetran (all sets)'
+               in xref_summary)
+        # Cetran lacks class 16 only: 23 measured by default, 24 with the
+        # cross-set reference (Test + Cetran has every class).
+        assert 'Spearman rho over the 23 measured classes:' in default_summary
+        assert 'Spearman rho over the 24 measured classes:' in xref_summary
+    print('test_cross_set_reference passed')
 
 
 if __name__ == '__main__':
     test_knn_shares_find_the_nearest_class()
     test_profile_weights_and_exclusion()
     test_split_measures_match_brute_force()
+    test_split_measures_nan_r_ood()
+    test_placement_rows()
     test_reference_selection()
     test_run_end_to_end()
+    test_cross_set_reference()
     print('ALL TESTS PASSED')
