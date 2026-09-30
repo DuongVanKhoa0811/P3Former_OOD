@@ -13,17 +13,37 @@ for every point.
 
 Per evaluation set (``SETS``: Cetran, Test, Test + Cetran) the tool
 histograms m for every split -- the 24 single-class splits and the random
-sweep's partitions -- and u, over bins log-spaced from 1e-15 to 0.5 whose
-edges include every reported delta (``DELTAS``). Per split and delta it
-reports the OOD / ID divided counts and shares, the divided precision
-OOD / (OOD + ID divided), the selectivity (OOD retention over ID retention,
-retention = divided / flat-uncertain) and the log OOD/ID divided ratio;
-per split also delta95 -- the largest bin edge with at least 95% of the OOD
-points divided -- and the ID divided share there (about Group MSP's
-FPR@95). It joins each split's Group MSP metrics, their delta against flat
-MSP and ``improvement`` from the sweep logs, flags the robust splits
-(improvement > 0 on every set) and computes the Spearman correlations of
-the divided statistics with the metric deltas. The model is never run.
+sweep's partitions -- and u. Bins are log-spaced at ``BINS_PER_DECADE`` per
+decade below ``TOP_START`` (0.01, down to ``M_MIN``) and linear in steps of
+``TOP_STEP`` (1e-4) from there up to ``upper``: 0.5 for m (m never exceeds
+it) and 1.0 for u (u reaches 23/24, well past where m tops out -- clipping
+u's bins at 0.5 was bug F1, which ties every point above it and wrecks
+flat MSP's AP). The top of the ranking decides AP, so it gets the fine
+linear bins; every reported delta (``DELTAS``) is an exact edge.
+
+Two histograms are kept per score. The *exact* one (m, u) is the group /
+flat mass computed as a direct sum over each side's own classes -- never
+1 - P_A, so confident points don't cancel -- and drives every divided
+statistic and delta95. The *float32* one (m32 = 1 - float64(max(P_A, P_B)),
+u32 = 1 - float64(max_c p_c), the max itself still taken in float32 before
+the cast) reproduces the ties of the score online and offline actually
+rank by, -max(P_A, P_B) / -max_c p_c in float32 (F2): a float32 just below
+1 has a spacing of 2^-24 ~ 6e-8, so points whose exact m or u falls below
+about that collapse onto the same score and tie, which the exact
+histogram alone would still rank apart. f32_* metrics (from m32 / u32) are
+what is checked against the sweep logs and reported in the float32-tie
+section; exact_* metrics (from m / u) are the tool's own reference.
+
+Per split and delta it reports the OOD / ID divided counts and shares, the
+divided precision OOD / (OOD + ID divided), the selectivity (OOD retention
+over ID retention, retention = divided / flat-uncertain) and the log
+OOD/ID divided ratio; per split also delta95 -- the largest bin edge with
+at least 95% of the OOD points divided -- and the ID divided share there
+(about Group MSP's FPR@95). It joins each split's Group MSP metrics, their
+delta against flat MSP and ``improvement`` from the sweep logs, flags the
+robust splits (improvement > 0 on every set) and computes the Spearman
+correlations of the divided statistics with the metric deltas. The model
+is never run.
 
 Inputs under --root (default work_dirs/p3former_2xb1_3x_dso_ood_dump): the
 logits dumps ``logits`` (Cetran) and ``logits_test`` (test), the random
@@ -31,7 +51,8 @@ sweeps ``bipartitions{,_test,_test_cetran}`` and the single-class sweeps
 ``singletons{,_test,_test_cetran}`` of tools/sweep_bipartitions.py. Each
 dump directory is read once; Test + Cetran sums the histograms of both.
 Outputs in --out-dir (default <root>/divided_mass):
-    histograms.npz   bin edges, split masks and every histogram
+    histograms.npz   bin edges (edges_m, edges_u), split masks and every
+                     histogram (m, m32, u, u32, counts)
     <set>.tsv        one row per split, for cetran, test and test_cetran
     flat.tsv         the flat-MSP reference, one row per set
     robust.tsv       the splits with improvement > 0 on every set
@@ -81,6 +102,8 @@ DELTAS = (1e-4, 1e-3, 1e-2, 0.05, 0.1, 0.2, 0.3)
 HEADLINE = 0.05  # the delta of the summary tables and the bubble charts
 M_MIN = 1e-15  # first log-spaced edge; m below it shares the bin [0, M_MIN)
 BINS_PER_DECADE = 200
+TOP_START = 1e-2  # bins are log-spaced below this, linear from here up
+TOP_STEP = 1e-4  # linear bin width from TOP_START to `upper`
 # improvement = mean dAUROC + mean dAP - mean dFPR@95 over Group MSP, Group
 # Energy and Group Entropy (summarize_hierarchy_ablation.py --family group
 # --exclude odin; MaxLogit is always dropped)
@@ -97,17 +120,25 @@ TARGETS = ('d_auroc', 'd_ap', 'd_fpr95', 'improvement')
 
 
 # --------------------------------------------------------------------- bins
-def bin_edges(deltas=DELTAS, m_min=M_MIN, per_decade=BINS_PER_DECADE):
+def bin_edges(deltas=DELTAS, upper=0.5, m_min=M_MIN, per_decade=BINS_PER_DECADE,
+             top_start=TOP_START, top_step=TOP_STEP):
     """Ascending bin edges: 0, then ``per_decade`` log-spaced edges per
-    decade from ``m_min`` to 0.5, with every delta inserted as an exact edge.
-    Bin i is [edges[i], edges[i + 1]); m = 0.5 falls into the last one."""
+    decade from ``m_min`` to ``top_start``, then edges linear in steps of
+    ``top_step`` from ``top_start`` to ``upper``, with every delta inserted
+    as an exact edge. Bin i is [edges[i], edges[i + 1]); ``upper`` is the
+    last edge. The linear top is fine enough (1e-4 by default) that AP,
+    which the top of the ranking decides, is not limited by the bins."""
     for d in deltas:
-        if not m_min < d < 0.5:
-            raise ValueError(f'delta {d} outside ({m_min}, 0.5)')
-    steps = int(round(math.log10(0.5 / m_min) * per_decade))
-    grid = np.logspace(math.log10(m_min), math.log10(0.5), steps + 1)
-    grid[0], grid[-1] = m_min, 0.5
-    return np.unique(np.concatenate([[0.0], grid,
+        if not m_min < d < upper:
+            raise ValueError(f'delta {d} outside ({m_min}, {upper})')
+    log_steps = int(round(math.log10(top_start / m_min) * per_decade))
+    log_grid = np.logspace(math.log10(m_min), math.log10(top_start),
+                           log_steps + 1)
+    log_grid[0], log_grid[-1] = m_min, top_start
+    lin_steps = int(round((upper - top_start) / top_step))
+    lin_grid = np.linspace(top_start, upper, lin_steps + 1)
+    lin_grid[0], lin_grid[-1] = top_start, upper
+    return np.unique(np.concatenate([[0.0], log_grid, lin_grid,
                                      np.asarray(deltas, np.float64)]))
 
 
@@ -147,43 +178,81 @@ def flat_uncertainty(p):
     return q.sum(axis=1)
 
 
+def flat_uncertainty32(p):
+    """u32 = 1 - float64(max_c p_c): the value flat MSP's float32 score
+    -max_c p_c ranks by. The max stays in float32 (``p``'s own dtype); only
+    the ``1 -`` runs in float64, so no further rounding is added. Ties
+    points whose exact u falls below float32's resolution near 1, exactly
+    as flat MSP does."""
+    return 1.0 - p.max(axis=1).astype(np.float64)
+
+
+def group_masses(p, a_mask):
+    """(P_A, P_B) [c, N] of the splits in ``a_mask`` [c, C]: sums of ``p``
+    over each side's own classes, at ``p``'s dtype (never 1 - P_A, so
+    confident points don't cancel)."""
+    M = a_mask.astype(p.dtype)
+    return M @ p.T, (1.0 - M) @ p.T
+
+
 def divided_mass(p, a_mask):
     """m = min(P_A, P_B) [c, N] of the splits in ``a_mask`` [c, C]; both
     group masses are sums over their own classes (never 1 - P_A)."""
-    M = a_mask.astype(p.dtype)
-    return np.minimum(M @ p.T, (1.0 - M) @ p.T)
+    PA, PB = group_masses(p, a_mask)
+    return np.minimum(PA, PB)
+
+
+def divided_mass32(p, a_mask):
+    """m32 = 1 - float64(max(P_A, P_B)) [c, N]: the value the sweep's
+    float32 group_msp score -max(P_A, P_B) ranks by. P_A, P_B are the same
+    float32 matmul results as :func:`divided_mass`; only the max is cast to
+    float64 before the ``1 -``, so no further rounding is added. Ties
+    splits whose exact m falls below float32's resolution near 1."""
+    PA, PB = group_masses(p, a_mask)
+    return 1.0 - np.maximum(PA, PB).astype(np.float64)
 
 
 # --------------------------------------------------------------- histograms
-def directory_histograms(files, a_mask, edges, backend='numpy',
+def directory_histograms(files, a_mask, edges_m, edges_u, backend='numpy',
                          device='cuda:0', chunk=64):
-    """Histograms of m (every split) and u over the frames in ``files``:
-    dict(m=[S, 2, B], u=[2, B], counts=[2]) of int64, index 0 = ID points,
-    1 = OOD points."""
+    """Histograms of m, m32 (every split) and u, u32 over the frames in
+    ``files``: dict(m=[S, 2, Bm], m32=[S, 2, Bm], u=[2, Bu], u32=[2, Bu],
+    counts=[2]) of int64, index 0 = ID points, 1 = OOD points. ``edges_m``
+    bins m / m32 (upper 0.5); ``edges_u`` bins u / u32 (upper 1.0)."""
     if backend == 'torch':
-        return _torch_directory_histograms(files, a_mask, edges, device,
-                                           chunk)
+        return _torch_directory_histograms(files, a_mask, edges_m, edges_u,
+                                           device, chunk)
     if backend != 'numpy':
         raise ValueError(f"backend must be 'numpy' or 'torch', got {backend}")
-    num, nbins = a_mask.shape[0], len(edges) - 1
-    m_hist = np.zeros((num, 2, nbins), np.int64)
-    u_hist = np.zeros((2, nbins), np.int64)
+    num = a_mask.shape[0]
+    nbins_m, nbins_u = len(edges_m) - 1, len(edges_u) - 1
+    m_hist = np.zeros((num, 2, nbins_m), np.int64)
+    m32_hist = np.zeros((num, 2, nbins_m), np.int64)
+    u_hist = np.zeros((2, nbins_u), np.int64)
+    u32_hist = np.zeros((2, nbins_u), np.int64)
     counts = np.zeros(2, np.int64)
     for z, ood in sb.prefetch_frames(files):
         if not z.shape[0]:
             continue
         p = softmax(z)
         counts += [int((~ood).sum()), int(ood.sum())]
-        u_bins = bin_index(flat_uncertainty(p), edges)
+        u_bins = bin_index(flat_uncertainty(p), edges_u)
+        u32_bins = bin_index(flat_uncertainty32(p), edges_u)
         for lab, sel in ((0, ~ood), (1, ood)):
-            u_hist[lab] += np.bincount(u_bins[sel], minlength=nbins)
+            u_hist[lab] += np.bincount(u_bins[sel], minlength=nbins_u)
+            u32_hist[lab] += np.bincount(u32_bins[sel], minlength=nbins_u)
         for j0 in range(0, num, chunk):
-            m_bins = bin_index(divided_mass(p, a_mask[j0:j0 + chunk]), edges)
+            PA, PB = group_masses(p, a_mask[j0:j0 + chunk])
+            m_bins = bin_index(np.minimum(PA, PB), edges_m)
+            m32_bins = bin_index(1.0 - np.maximum(PA, PB).astype(np.float64),
+                                 edges_m)
             for j in range(m_bins.shape[0]):
                 for lab, sel in ((0, ~ood), (1, ood)):
                     m_hist[j0 + j, lab] += np.bincount(m_bins[j, sel],
-                                                       minlength=nbins)
-    return dict(m=m_hist, u=u_hist, counts=counts)
+                                                       minlength=nbins_m)
+                    m32_hist[j0 + j, lab] += np.bincount(m32_bins[j, sel],
+                                                         minlength=nbins_m)
+    return dict(m=m_hist, m32=m32_hist, u=u_hist, u32=u32_hist, counts=counts)
 
 
 def _torch_bin_index(values, edges_t):
@@ -192,15 +261,20 @@ def _torch_bin_index(values, edges_t):
     return b.clamp_(0, edges_t.numel() - 2)
 
 
-def _torch_directory_histograms(files, a_mask, edges, device, chunk):
+def _torch_directory_histograms(files, a_mask, edges_m, edges_u, device,
+                                chunk):
     """:func:`directory_histograms` on a torch device (TF32 off)."""
     torch = sb.require_torch()
     dev = torch.device(device)
     mask = torch.from_numpy(a_mask).to(dev)
-    edges_t = torch.from_numpy(edges).to(dev)
-    num, nbins = a_mask.shape[0], len(edges) - 1
-    m_hist = torch.zeros((num, 2, nbins), dtype=torch.int64, device=dev)
-    u_hist = torch.zeros((2, nbins), dtype=torch.int64, device=dev)
+    edges_m_t = torch.from_numpy(edges_m).to(dev)
+    edges_u_t = torch.from_numpy(edges_u).to(dev)
+    num = a_mask.shape[0]
+    nbins_m, nbins_u = len(edges_m) - 1, len(edges_u) - 1
+    m_hist = torch.zeros((num, 2, nbins_m), dtype=torch.int64, device=dev)
+    m32_hist = torch.zeros((num, 2, nbins_m), dtype=torch.int64, device=dev)
+    u_hist = torch.zeros((2, nbins_u), dtype=torch.int64, device=dev)
+    u32_hist = torch.zeros((2, nbins_u), dtype=torch.int64, device=dev)
     counts = np.zeros(2, np.int64)
     for z, ood in sb.prefetch_frames(files):
         if not z.shape[0]:
@@ -209,22 +283,34 @@ def _torch_directory_histograms(files, a_mask, edges, device, chunk):
         n_id = int(ood.size - ood.sum())
         counts += [n_id, ood.size - n_id]
         p = torch.softmax(torch.from_numpy(z[order]).to(dev), dim=1)
+        pmax, argmax = p.max(dim=1)
         q = p.clone()
-        q[torch.arange(q.shape[0], device=dev), p.argmax(dim=1)] = 0.0
-        u_bins = _torch_bin_index(q.sum(dim=1), edges_t)
-        u_hist[0] += sb.torch_counts(u_bins[:n_id], nbins)
-        u_hist[1] += sb.torch_counts(u_bins[n_id:], nbins)
+        q[torch.arange(q.shape[0], device=dev), argmax] = 0.0
+        u_bins = _torch_bin_index(q.sum(dim=1), edges_u_t)
+        u32_bins = _torch_bin_index(1.0 - pmax.double(), edges_u_t)
+        u_hist[0] += sb.torch_counts(u_bins[:n_id], nbins_u)
+        u_hist[1] += sb.torch_counts(u_bins[n_id:], nbins_u)
+        u32_hist[0] += sb.torch_counts(u32_bins[:n_id], nbins_u)
+        u32_hist[1] += sb.torch_counts(u32_bins[n_id:], nbins_u)
         for j0 in range(0, num, chunk):
             M = mask[j0:j0 + chunk].float()
             c = M.shape[0]
-            b = _torch_bin_index(torch.minimum(M @ p.T, (1.0 - M) @ p.T),
-                                 edges_t)
-            b += (torch.arange(c, device=dev) * nbins)[:, None]
+            PA, PB = M @ p.T, (1.0 - M) @ p.T
+            b = _torch_bin_index(torch.minimum(PA, PB), edges_m_t)
+            b32 = _torch_bin_index(1.0 - torch.maximum(PA, PB).double(),
+                                   edges_m_t)
+            offset = (torch.arange(c, device=dev) * nbins_m)[:, None]
+            b, b32 = b + offset, b32 + offset
             m_hist[j0:j0 + c, 0] += sb.torch_counts(
-                b[:, :n_id].reshape(-1), c * nbins).view(c, nbins)
+                b[:, :n_id].reshape(-1), c * nbins_m).view(c, nbins_m)
             m_hist[j0:j0 + c, 1] += sb.torch_counts(
-                b[:, n_id:].reshape(-1), c * nbins).view(c, nbins)
-    return dict(m=m_hist.cpu().numpy(), u=u_hist.cpu().numpy(),
+                b[:, n_id:].reshape(-1), c * nbins_m).view(c, nbins_m)
+            m32_hist[j0:j0 + c, 0] += sb.torch_counts(
+                b32[:, :n_id].reshape(-1), c * nbins_m).view(c, nbins_m)
+            m32_hist[j0:j0 + c, 1] += sb.torch_counts(
+                b32[:, n_id:].reshape(-1), c * nbins_m).view(c, nbins_m)
+    return dict(m=m_hist.cpu().numpy(), m32=m32_hist.cpu().numpy(),
+                u=u_hist.cpu().numpy(), u32=u32_hist.cpu().numpy(),
                 counts=counts)
 
 
@@ -256,24 +342,27 @@ def depth95(tail_ood, n_ood):
     return int(np.flatnonzero(tail_ood >= 0.95 * n_ood)[-1])
 
 
-def divided_stats(hist, counts, edges, deltas=DELTAS):
+def divided_stats(hist, counts, edges_m, edges_u, deltas=DELTAS):
     """Divided statistics of every split, one OrderedDict each: per delta the
     divided counts and shares (%), the divided precision (%), the OOD / ID
     retention against flat MSP (divided / flat-uncertain, %), their ratio
     (the selectivity) and the log OOD/ID divided ratio (+0.5 on each count),
     then delta95 and the ID divided share there.
 
-    hist: dict(m=[S, 2, B], u=[2, B]) of one set; counts: (n_id, n_ood)."""
+    hist: dict(m=[S, 2, B], u=[2, B]) of one set; counts: (n_id, n_ood).
+    ``edges_m`` / ``edges_u`` must be the edges hist['m'] / hist['u'] were
+    histogrammed with."""
     n_id, n_ood = (int(c) for c in counts)
     tail, u_tail = tail_counts(hist['m']), tail_counts(hist['u'])
-    idx = [edge_index(edges, d) for d in deltas]
+    idx_m = [edge_index(edges_m, d) for d in deltas]
+    idx_u = [edge_index(edges_u, d) for d in deltas]
     rows = []
     for s in range(tail.shape[0]):
         row = OrderedDict()
-        for d, i in zip(deltas, idx):
+        for d, i, iu in zip(deltas, idx_m, idx_u):
             key = delta_key(d)
             id_div, ood_div = int(tail[s, 0, i]), int(tail[s, 1, i])
-            id_unc, ood_unc = int(u_tail[0, i]), int(u_tail[1, i])
+            id_unc, ood_unc = int(u_tail[0, iu]), int(u_tail[1, iu])
             row[f'ood_div_n@{key}'] = ood_div
             row[f'id_div_n@{key}'] = id_div
             row[f'ood_div@{key}'] = share(ood_div, n_ood)
@@ -286,26 +375,27 @@ def divided_stats(hist, counts, edges, deltas=DELTAS):
             row[f'log_ratio@{key}'] = math.log10(
                 ((ood_div + 0.5) / n_ood) / ((id_div + 0.5) / n_id))
         i95 = depth95(tail[s, 1], n_ood)
-        row['delta95'] = float(edges[i95])
+        row['delta95'] = float(edges_m[i95])
         row['id_div@delta95'] = share(int(tail[s, 0, i95]), n_id)
         rows.append(row)
     return rows
 
 
-def flat_stats(hist, counts, edges, deltas=DELTAS):
+def flat_stats(hist, counts, edges_u, deltas=DELTAS):
     """The flat-MSP reference of one set: per delta the uncertain shares
-    (u >= delta) and their precision, then u95 and the ID share there."""
+    (u >= delta) and their precision, then u95 and the ID share there.
+    ``edges_u`` must be the edges hist['u'] was histogrammed with."""
     n_id, n_ood = (int(c) for c in counts)
     u_tail = tail_counts(hist['u'])
     row = OrderedDict()
     for d in deltas:
-        i, key = edge_index(edges, d), delta_key(d)
+        i, key = edge_index(edges_u, d), delta_key(d)
         id_unc, ood_unc = int(u_tail[0, i]), int(u_tail[1, i])
         row[f'ood_unc@{key}'] = share(ood_unc, n_ood)
         row[f'id_unc@{key}'] = share(id_unc, n_id)
         row[f'precision@{key}'] = share(ood_unc, ood_unc + id_unc)
     i95 = depth95(u_tail[1], n_ood)
-    row['u95'] = float(edges[i95])
+    row['u95'] = float(edges_u[i95])
     row['id_unc@u95'] = share(int(u_tail[0, i95]), n_id)
     return row
 
@@ -428,12 +518,12 @@ def default_subsets(sets):
     return subsets
 
 
-def split_table(names, subsets, hist, edges, metrics, deltas=DELTAS):
+def split_table(names, subsets, hist, edges_m, edges_u, metrics, deltas=DELTAS):
     """One row per split: composition, point counts, divided statistics,
-    the sweep's metrics and the Group MSP metrics recomputed from the m
-    histograms (hist_*, for the consistency check)."""
+    the sweep's metrics and the Group MSP metrics recomputed from the m32 /
+    m histograms (f32_* / exact_*, for the consistency check)."""
     n_id, n_ood = (int(c) for c in hist['counts'])
-    stats = divided_stats(hist, hist['counts'], edges, deltas)
+    stats = divided_stats(hist, hist['counts'], edges_m, edges_u, deltas)
     rows = []
     for s, (name, subset) in enumerate(zip(names, subsets)):
         row = OrderedDict([
@@ -442,36 +532,41 @@ def split_table(names, subsets, hist, edges, metrics, deltas=DELTAS):
             ('n_id', n_id), ('n_ood', n_ood)])
         row.update(stats[s])
         row.update(metrics[name])
-        auroc, ap, fpr95 = histogram_metrics(hist['m'][s, 1], hist['m'][s, 0])
-        row.update([('hist_auroc', auroc), ('hist_ap', ap),
-                    ('hist_fpr95', fpr95)])
+        f32 = histogram_metrics(hist['m32'][s, 1], hist['m32'][s, 0])
+        exact = histogram_metrics(hist['m'][s, 1], hist['m'][s, 0])
+        row.update(zip(('f32_auroc', 'f32_ap', 'f32_fpr95'), f32))
+        row.update(zip(('exact_auroc', 'exact_ap', 'exact_fpr95'), exact))
         rows.append(row)
     return rows
 
 
-def flat_row(label, hist, edges, rows, deltas=DELTAS):
+def flat_row(label, hist, edges_u, rows, deltas=DELTAS):
     """The flat-MSP row of one set, with the sweep's msp row and the same
-    metrics recomputed from the u histograms."""
+    metrics recomputed from the u32 / u histograms."""
     row = OrderedDict([('set', label), ('n_id', int(hist['counts'][0])),
                        ('n_ood', int(hist['counts'][1]))])
-    row.update(flat_stats(hist, hist['counts'], edges, deltas))
+    row.update(flat_stats(hist, hist['counts'], edges_u, deltas))
     msp = rows['msp']
-    auroc, ap, fpr95 = histogram_metrics(hist['u'][1], hist['u'][0])
+    f32 = histogram_metrics(hist['u32'][1], hist['u32'][0])
+    exact = histogram_metrics(hist['u'][1], hist['u'][0])
     row.update([('msp_auroc', msp[0]), ('msp_ap', msp[1]),
-                ('msp_fpr95', msp[2]), ('hist_auroc', auroc),
-                ('hist_ap', ap), ('hist_fpr95', fpr95)])
+               ('msp_fpr95', msp[2])])
+    row.update(zip(('f32_auroc', 'f32_ap', 'f32_fpr95'), f32))
+    row.update(zip(('exact_auroc', 'exact_ap', 'exact_fpr95'), exact))
     return row
 
 
 def consistency_checks(label, table, flat, agreement):
     """The summary's check rows: worst |difference| against its tolerance,
-    PASS or FAIL."""
+    PASS or FAIL. Compares the f32-histogram metrics -- which reproduce the
+    ties of the float32 score the sweep actually ranks by -- against the
+    sweep log."""
     checks = []
     for metric, tol in CHECK_TOL.items():
-        worst = max(abs(r[f'hist_{metric}'] - r[f'gmsp_{metric}'])
+        worst = max(abs(r[f'f32_{metric}'] - r[f'gmsp_{metric}'])
                     for r in table)
         checks.append((f'Group MSP {metric}, histograms vs sweep', worst, tol))
-        worst = abs(flat[f'hist_{metric}'] - flat[f'msp_{metric}'])
+        worst = abs(flat[f'f32_{metric}'] - flat[f'msp_{metric}'])
         checks.append((f'flat MSP {metric}, histograms vs sweep', worst, tol))
     n_common, worst = agreement
     checks.append((f'{n_common} splits in both sweep logs', worst,
@@ -562,17 +657,60 @@ def pct(value):
     return '-' if math.isnan(value) else f'{value:.3g}'
 
 
+def float32_tie_counts(tables):
+    """Per set: (n splits with |exact_fpr95 - f32_fpr95| beyond CHECK_TOL, n
+    with |exact_auroc - f32_auroc| beyond CHECK_TOL, n splits)."""
+    out = OrderedDict()
+    for key, rows in tables.items():
+        n_fpr = sum(1 for r in rows
+                    if abs(r['exact_fpr95'] - r['f32_fpr95']) > CHECK_TOL['fpr95'])
+        n_auroc = sum(1 for r in rows
+                      if abs(r['exact_auroc'] - r['f32_auroc']) > CHECK_TOL['auroc'])
+        out[key] = (n_fpr, n_auroc, len(rows))
+    return out
+
+
+def worst_float32_ties(tables, sets, top=10):
+    """The ``top`` splits with the largest |exact_fpr95 - f32_fpr95|, over
+    every set: (set label, name, classes, delta95, f32 fpr95, exact fpr95)."""
+    rows = [(abs(r['exact_fpr95'] - r['f32_fpr95']), sets[key]['label'],
+            r['name'], r['group_A'], r['delta95'], r['f32_fpr95'],
+            r['exact_fpr95'])
+           for key, rows in tables.items() for r in rows]
+    rows.sort(key=lambda t: -t[0])
+    return [t[1:] for t in rows[:top]]
+
+
 def write_summary(path, sets, tables, flats, checks, robust_rows, rho,
                   headline=HEADLINE):
     key = delta_key(headline)
     lines = ['# Divided mass of two-group splits', '',
              'Divided at delta: m = min(P_A, P_B) >= delta. Flat uncertain: '
              f'u = 1 - max p >= delta. The tables use delta = {key}; the TSVs '
-             'hold every delta.', '', '## Consistency checks', '']
+             'hold every delta. f32_* / exact_* columns compare the '
+             'float32-tie (m32 / u32) and exact (m / u) histograms.', '',
+             '## Consistency checks', '']
     lines += md_table(['set', 'check', 'worst abs diff', 'tolerance',
                        'status'],
                       [(c['set'], c['check'], fmt(c['worst'], 3),
                         fmt(c['tolerance'], 3), c['status']) for c in checks])
+    tie_counts = float32_tie_counts(tables)
+    lines += ['', '## Float32 ties in the implemented Group MSP', '']
+    lines += md_table(
+        ['set', f'FPR@95 gap > {CHECK_TOL["fpr95"]:g}',
+         f'AUROC gap > {CHECK_TOL["auroc"]:g}', 'splits'],
+        [(sets[k]['label'], n_fpr, n_auroc, n)
+         for k, (n_fpr, n_auroc, n) in tie_counts.items()])
+    lines += ['', 'Largest FPR@95 gaps (f32 vs exact), over every set:', '']
+    lines += md_table(
+        ['set', 'split', 'classes', 'delta95', 'f32 FPR@95', 'exact FPR@95'],
+        [(lbl, name, classes, f'{d95:.2g}', fmt(f32v), fmt(exactv))
+         for lbl, name, classes, d95, f32v, exactv
+         in worst_float32_ties(tables, sets)])
+    lines += ['', 'The implemented Group MSP score is the float32 '
+             '-max(P_A, P_B): it cannot rank two points apart once their '
+             'divided mass m is below about 2^-24 ~ 6e-8, since both round '
+             'to the same float32 max and tie.']
     lines += ['', f'## Flat MSP reference (delta = {key})', '']
     lines += md_table(['set', 'OOD uncertain %', 'ID uncertain %',
                        'precision %', 'u95', 'ID uncertain % at u95',
@@ -631,7 +769,8 @@ def run(sets, subsets, out_dir, backend='numpy', device='cuda:0', chunk=64,
     ``subsets``; returns dict(tables, checks, robust)."""
     names = [sb.partition_name(s) for s in subsets]
     a_mask = sb.subsets_to_mask(subsets)
-    edges = bin_edges(deltas)
+    edges_m = bin_edges(deltas, upper=0.5)
+    edges_u = bin_edges(deltas, upper=1.0)
     per_dir = OrderedDict()
     for spec in sets.values():
         for d in spec['dumps']:
@@ -642,8 +781,8 @@ def run(sets, subsets, out_dir, backend='numpy', device='cuda:0', chunk=64,
                 raise FileNotFoundError(f'no .npz dumps in {d}')
             t0 = time.time()
             print(f'{d}: {len(files)} frames, {len(names)} splits', flush=True)
-            per_dir[d] = directory_histograms(files, a_mask, edges, backend,
-                                              device, chunk)
+            per_dir[d] = directory_histograms(files, a_mask, edges_m, edges_u,
+                                              backend, device, chunk)
             print(f'  histograms in {time.time() - t0:.0f} s', flush=True)
 
     hists, tables, flats, checks = OrderedDict(), OrderedDict(), [], []
@@ -651,9 +790,9 @@ def run(sets, subsets, out_dir, backend='numpy', device='cuda:0', chunk=64,
         hist = sum_histograms([per_dir[d] for d in spec['dumps']])
         rows = sweep_rows(spec['sweep_log'], spec['singletons_log'])
         hists[key] = hist
-        tables[key] = split_table(names, subsets, hist, edges,
+        tables[key] = split_table(names, subsets, hist, edges_m, edges_u,
                                   split_metrics(rows, names), deltas)
-        flats.append(flat_row(spec['label'], hist, edges, rows, deltas))
+        flats.append(flat_row(spec['label'], hist, edges_u, rows, deltas))
         checks += consistency_checks(
             spec['label'], tables[key], flats[-1],
             log_agreement(spec['sweep_log'], spec['singletons_log']))
@@ -666,7 +805,8 @@ def run(sets, subsets, out_dir, backend='numpy', device='cuda:0', chunk=64,
     robust_rows = robust_table(tables, robust)
 
     os.makedirs(out_dir, exist_ok=True)
-    arrays = dict(edges=edges, names=np.array(names), a_mask=a_mask)
+    arrays = dict(edges_m=edges_m, edges_u=edges_u, names=np.array(names),
+                 a_mask=a_mask)
     for key, hist in hists.items():
         for part, value in hist.items():
             arrays[f'{key}_{part}'] = value
