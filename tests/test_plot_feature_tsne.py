@@ -9,6 +9,7 @@ import sys
 import tempfile
 from collections import OrderedDict
 
+import matplotlib.pyplot as plt
 import numpy as np
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -54,50 +55,37 @@ def test_tsne_figure_smoke():
 
 
 def test_class_names_stay_inside_the_figure():
-    import matplotlib.patches
-    import plot_divided_mass as pdm  # noqa: E402
-
+    # Long names at the far left and far right of each of three panels (the
+    # real layout): centred, they would run past the figure edge.
     rng = np.random.RandomState(0)
-    # One class at far left, one at far right with a long name
-    xy_left = np.hstack([
-        -50 + 0.1 * rng.randn(50, 1),
-        rng.randn(50, 1)
-    ])
-    xy_right = np.hstack([
-        50 + 0.1 * rng.randn(50, 1),
-        rng.randn(50, 1)
-    ])
-    xy = np.vstack([xy_left, xy_right])
-    label = np.concatenate([np.zeros(50), np.ones(50)])
-    raw = np.ones(100)
-    ood = np.zeros(100, dtype=bool)
-
-    panels = OrderedDict([('Panel', (xy, label, raw, ood))])
-
-    # Monkeypatch pdm.save to capture the figure
-    saved_figs = []
-    original_save = pdm.save
-    def mock_save(fig, stem):
-        saved_figs.append(fig)
-    pdm.save = mock_save
-
+    n = 40
+    left = sb.CLASSES.index('perimeter-barrier')
+    right = sb.CLASSES.index('overhead-bridge')
+    xy = np.vstack([np.column_stack([-50 + rng.randn(n), rng.randn(n)]),
+                    np.column_stack([50 + rng.randn(n), rng.randn(n)])])
+    label = np.repeat([left, right], n)
+    ood = np.zeros(2 * n, bool)
+    raw = np.ones(2 * n, int)
+    panels = OrderedDict((name, (xy, label, raw, ood))
+                         for name in ('Cetran', 'Test', 'Test + Cetran'))
+    captured = {}
+    save = tsne.pdm.save
+    tsne.pdm.save = lambda fig, stem: captured.setdefault('fig', fig)
     try:
-        tsne.tsne_figure(panels, 'dummy_stem')
-        assert len(saved_figs) == 1, 'pdm.save was not called'
-        fig = saved_figs[0]
-        fig.canvas.draw()
-
-        # Check that all text extents are within figure bounds
-        fig_bbox = fig.bbox
-        for text in fig.texts:
-            extent = text.get_window_extent(renderer=fig.canvas.get_renderer())
-            assert extent.xmin >= fig_bbox.xmin - 1, \
-                f'Text "{text.get_text()}" extends left of figure (xmin={extent.xmin}, fig={fig_bbox.xmin})'
-            assert extent.xmax <= fig_bbox.xmax + 1, \
-                f'Text "{text.get_text()}" extends right of figure (xmax={extent.xmax}, fig={fig_bbox.xmax})'
+        with plt.rc_context(tsne.pdm.STYLE):
+            tsne.tsne_figure(panels, 'unused')
+            fig = captured['fig']
+            fig.canvas.draw()
+            renderer = fig.canvas.get_renderer()
+            names = [t for ax in fig.axes for t in ax.texts]
+            assert len(names) == 6
+            for t in names:
+                box = t.get_window_extent(renderer)
+                assert (box.x0 >= fig.bbox.x0 - 1
+                        and box.x1 <= fig.bbox.x1 + 1), (t.get_text(), box)
     finally:
-        pdm.save = original_save
-
+        tsne.pdm.save = save
+        plt.close('all')
     print('test_class_names_stay_inside_the_figure passed')
 
 

@@ -152,7 +152,7 @@ def tsne_figure(panels, stem):
             names.append(sb.CLASSES[c])
     for marker, name in OOD_MARKERS.values():
         handles.append(Line2D([], [], ls='none', marker=marker,
-                              markersize=3.5, color=OOD_COLOUR,
+                              markersize=3.5, color=OOD_COLOUR, alpha=0.7,
                               markeredgewidth=0.6))
         names.append(name)
     fig.legend(handles, names, loc='lower center', ncol=7, frameon=False,
