@@ -201,18 +201,20 @@ def test_reference_selection():
     print('test_reference_selection passed')
 
 
-def _write_features(d, frames, rng, centres, dim=8, missing=None):
+def _write_features(d, frames, rng, centres, dim=8, missing=None, noise=0.3):
     """Feature samples as tools/extract_point_features.py writes them; the
     OOD points sit next to class 16 (overhead-bridge). ``missing`` drops
     that class's rows entirely (the OOD cluster stays at its centre), for a
-    set with no ID sample of one class."""
+    set with no ID sample of one class. ``noise`` is the per-point spread
+    around each class centre; the default keeps classes cleanly separated,
+    as every test but test_cross_set_reference wants."""
     os.makedirs(d)
     for f in range(frames):
         label = np.concatenate([np.repeat(np.arange(C), 20), np.full(30, 24)])
         ood = label == 24
-        noise = 0.3 * rng.randn(len(label), dim)
-        feat = np.where(ood[:, None], centres[16] + 0.4 + noise,
-                        centres[np.minimum(label, C - 1)] + noise)
+        spread = noise * rng.randn(len(label), dim)
+        feat = np.where(ood[:, None], centres[16] + 0.4 + spread,
+                        centres[np.minimum(label, C - 1)] + spread)
         pos = (0.1 * rng.randn(len(label), dim)).astype(np.float16)
         raw = np.where(ood, 17, 1).astype(np.int16)
         if missing is not None:
@@ -290,10 +292,17 @@ def test_cross_set_reference():
         root = os.path.join(tmp, 'root')
         # Cetran has no ID sample of class 16 at all -- the real dump's
         # situation for ten classes; the OOD cluster still sits at its
-        # centre. Test keeps every class, so Test + Cetran has all 24.
+        # centre. Test keeps every class, so Test + Cetran has all 24. A
+        # wider noise (not the default's clean separation) gives every
+        # class some cross-class neighbours, so the rho row count agrees
+        # across x's -- with the default's tight clusters, r_ood and r_id
+        # are both exactly 0 for most classes, and contrast (ratio(0, 0))
+        # is NaN for more classes than the bank-exclusion alone accounts
+        # for, unrelated to what this test is checking.
         _write_features(os.path.join(root, 'features_cetran'), 3, rng,
-                        centres, missing=16)
-        _write_features(os.path.join(root, 'features_test'), 4, rng, centres)
+                        centres, missing=16, noise=2.0)
+        _write_features(os.path.join(root, 'features_test'), 4, rng, centres,
+                        noise=2.0)
         divided = os.path.join(tmp, 'divided')
         os.makedirs(divided)
         subsets = sb.singleton_subsets() + [(12, 16), (0, 1, 2, 3, 4)]
@@ -309,14 +318,16 @@ def test_cross_set_reference():
 
         sets = res.resolve_sets(root)
         out_default = os.path.join(tmp, 'resemblance_default')
-        res.run(sets, divided, out_default, k=5, bank_per_class=40,
-               query_per_class=20, device='cpu')
+        _, _, default_rho = res.run(
+            sets, divided, out_default, k=5, bank_per_class=40,
+            query_per_class=20, device='cpu')
         out_none = os.path.join(tmp, 'resemblance_none')
         res.run(sets, divided, out_none, k=5, bank_per_class=40,
                query_per_class=20, device='cpu', reference=None)
         out_xref = os.path.join(tmp, 'resemblance_xref')
-        res.run(sets, divided, out_xref, k=5, bank_per_class=40,
-               query_per_class=20, device='cpu', reference='test_cetran')
+        _, _, xref_rho = res.run(
+            sets, divided, out_xref, k=5, bank_per_class=40,
+            query_per_class=20, device='cpu', reference='test_cetran')
 
         def profile_of(out_dir, key='cetran', space='full'):
             return {r['class']: r for r in dm.read_tsv(
@@ -324,11 +335,28 @@ def test_cross_set_reference():
 
         default_profile = profile_of(out_default)
         assert np.isnan(default_profile['overhead-bridge']['r_ood'])
+        # a class left out of the bank has no measured feature-divided
+        # share either (its singleton's 0.0 is structural, not measured).
+        assert np.isnan(default_profile['overhead-bridge']['feat_div_ood'])
+        assert np.isnan(default_profile['overhead-bridge']['feat_div_id'])
 
         xref_profile = profile_of(out_xref)
         assert not np.isnan(xref_profile['overhead-bridge']['r_ood'])
+        assert not np.isnan(xref_profile['overhead-bridge']['feat_div_ood'])
+        assert not np.isnan(xref_profile['overhead-bridge']['feat_div_id'])
         assert max(xref_profile,
                   key=lambda c: xref_profile[c]['r_ood']) == 'overhead-bridge'
+
+        # every class-level rho row agrees on n, once feat_div_ood/id are
+        # NaN'd at the same classes as r_ood/r_id/contrast.
+        default_cetran_n = {r['n'] for r in default_rho
+                            if r['set'] == 'cetran'
+                            and r['population'] == 'classes'}
+        assert default_cetran_n == {23}, default_cetran_n
+        xref_cetran_n = {r['n'] for r in xref_rho
+                         if r['set'] == 'cetran'
+                         and r['population'] == 'classes'}
+        assert xref_cetran_n == {24}, xref_cetran_n
 
         # reference=None is exactly the no-argument behaviour.
         with open(os.path.join(out_default,

@@ -254,17 +254,28 @@ def split_rows(names, subsets, divided, measures, threshold):
 
 
 def profile_rows(profile, reference, splits):
+    """One row per class. ``feat_div_ood`` / ``feat_div_id`` come from that
+    class's singleton split, except for a class the reference left out of
+    the bank (``reference[c]['excluded']``): there, no neighbour can ever
+    be of that class, so the singleton's feature-divided share is a
+    structural 0, not a measurement -- the same reason its r_ood is NaN --
+    and it is set to NaN too. ``ood_div`` / ``id_div`` / ``improvement``
+    come from the logit-space divided-mass tables regardless and are
+    always real measurements."""
     r_ood, r_id, contrast = profile
     by_name = {r['name']: r for r in splits}
     rows = []
     for c in range(NUM_CLASSES):
         single = by_name[sb.partition_name((c, ))]
+        excluded = bool(reference[c]['excluded'])
         rows.append(OrderedDict([
             ('class', sb.CLASSES[c]), ('bank', reference[c]['bank']),
             ('queries', reference[c]['queries']), ('r_ood', r_ood[c]),
             ('r_id', r_id[c]), ('contrast', contrast[c]),
-            ('feat_div_ood', single['feat_div_ood']),
-            ('feat_div_id', single['feat_div_id']),
+            ('feat_div_ood', float('nan') if excluded
+             else single['feat_div_ood']),
+            ('feat_div_id', float('nan') if excluded
+             else single['feat_div_id']),
             ('ood_div', single['ood_div']), ('id_div', single['id_div']),
             ('improvement', single['improvement'])]))
     return rows
@@ -412,12 +423,12 @@ def write_summary(path, sets, references, profiles, split_tables, rho, k,
                  and r['space'] == space and r['population'] == 'classes'}
         ys = ('ood_div', 'id_div', 'improvement')
         xs = ('r_ood', 'r_id', 'contrast', 'feat_div_ood', 'feat_div_id')
-        # 'measured' = has a finite r_ood (present in the bank); n comes
-        # from the r_ood rho rows themselves, ranged if they disagree.
-        r_ood_n = [r['n'] for r in rho if r['set'] == key
-                  and r['space'] == space and r['population'] == 'classes'
-                  and r['x'] == 'r_ood']
-        n_lo, n_hi = min(r_ood_n), max(r_ood_n)
+        # 'measured' = has a finite r_ood (present in the bank);
+        # feat_div_ood/id are NaN'd at the same classes (profile_rows), so
+        # every row of this table agrees on n -- ranged only if they do not.
+        class_n = [r['n'] for r in rho if r['set'] == key
+                  and r['space'] == space and r['population'] == 'classes']
+        n_lo, n_hi = min(class_n), max(class_n)
         heading = (f'Spearman rho over the {n_lo} measured classes:'
                   if n_lo == n_hi else 'Spearman rho over the '
                   f'{n_lo}-{n_hi} measured classes:')
