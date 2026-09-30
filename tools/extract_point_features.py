@@ -169,6 +169,17 @@ def index_dump(dump_dir):
     return out
 
 
+def dump_file_for(record, dump, dump_dir):
+    """The dump file for ``record['lidar_path']``. Raises KeyError naming
+    the frame, the lidar_path and ``dump_dir`` when the path is missing
+    from ``dump`` (an ``index_dump`` result)."""
+    lidar_path = record['lidar_path']
+    if lidar_path not in dump:
+        raise KeyError(f'frame {record["frame"]} ({lidar_path}) is not in '
+                       f'the dump {dump_dir}')
+    return dump[lidar_path]
+
+
 def compare_with_dump(record, dump_file):
     """Raise unless the record's logits, labels and OOD flags equal the
     dump's at the same points; returns the largest logit |difference|."""
@@ -235,12 +246,10 @@ def extract(config, checkpoint, out_dir, ann=None, per_class=64,
                                         frame)
             stats['max_logit_diff'] = max(stats['max_logit_diff'], diff)
             if dump is not None:
-                if record['lidar_path'] not in dump:
-                    raise KeyError(f'frame {frame} ({record["lidar_path"]}) is '
-                                   f'not in the dump {check_dump}')
+                dump_file = dump_file_for(record, dump, check_dump)
                 stats['max_dump_diff'] = max(
                     stats['max_dump_diff'],
-                    compare_with_dump(record, dump[record['lidar_path']]))
+                    compare_with_dump(record, dump_file))
             np.savez(osp.join(out_dir, f'f{frame:06d}.npz'), **record)
             per_class_count = np.bincount(record['label'][~record['ood']],
                                           minlength=NUM_CLASSES)[:NUM_CLASSES]

@@ -133,7 +133,16 @@ def test_dump_comparison():
         index = np.array([3, 10, 200], np.int32)
         record = dict(index=index, logits=logits[index], label=mapped[index],
                       ood=ood[index], frame=0, lidar_path='seq/000001.ply')
-        assert epf.index_dump(tmp) == {'seq/000001.ply': path}
+        dump = epf.index_dump(tmp)
+        assert dump == {'seq/000001.ply': path}
+        assert epf.dump_file_for(record, dump, tmp) == path
+        missing = dict(record, lidar_path='seq/999999.ply')
+        try:
+            epf.dump_file_for(missing, dump, tmp)
+        except KeyError as err:
+            assert 'seq/999999.ply' in str(err)
+        else:
+            raise AssertionError('missing lidar_path accepted')
         assert epf.compare_with_dump(record, path) == 0.0
         for key, bad in (('logits', logits[index] + np.float16(0.5)),
                          ('label', (mapped[index] + 1) % 24),
