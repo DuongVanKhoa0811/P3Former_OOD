@@ -686,13 +686,17 @@ def float32_tie_counts(tables):
 
 
 def worst_float32_ties(tables, sets, top=10):
-    """The ``top`` splits with the largest |exact_fpr95 - f32_fpr95| -- the
-    ill-conditioned ones, delta95 < WELL_CONDITIONED -- over every set: (set
-    label, name, classes, delta95, sweep fpr95, f32 fpr95, exact fpr95)."""
+    """The ``top`` ill-conditioned splits (delta95 < WELL_CONDITIONED) with
+    the largest |exact_fpr95 - f32_fpr95|, over every set: (set label, name,
+    classes, delta95, sweep fpr95, f32 fpr95, exact fpr95). Well-conditioned
+    splits are dropped before ranking, however large their own gap: the
+    table must never show a split that the Group MSP check still covers.
+    Fewer than ``top`` rows if fewer splits qualify, possibly none."""
     rows = [(abs(r['exact_fpr95'] - r['f32_fpr95']), sets[key]['label'],
             r['name'], r['group_A'], r['delta95'], r['gmsp_fpr95'],
             r['f32_fpr95'], r['exact_fpr95'])
-           for key, rows in tables.items() for r in rows]
+           for key, rows in tables.items() for r in rows
+           if r['delta95'] < WELL_CONDITIONED]
     rows.sort(key=lambda t: -t[0])
     return [t[1:] for t in rows[:top]]
 
@@ -717,15 +721,19 @@ def write_summary(path, sets, tables, flats, checks, robust_rows, rho,
          'splits'],
         [(sets[k]['label'], n_ill, n)
          for k, (n_ill, n) in tie_counts.items()])
-    lines += ['', 'Largest FPR@95 gaps (f32 vs exact) among the '
-             'ill-conditioned splits, over every set:', '']
-    lines += md_table(
-        ['set', 'split', 'classes', 'delta95', 'sweep FPR@95', 'f32 FPR@95',
-         'exact FPR@95'],
-        [(lbl, name, classes, f'{d95:.2g}', fmt(sweepv), fmt(f32v),
-          fmt(exactv))
-         for lbl, name, classes, d95, sweepv, f32v, exactv
-         in worst_float32_ties(tables, sets)])
+    worst = worst_float32_ties(tables, sets)
+    if worst:
+        lines += ['', 'Largest FPR@95 gaps (f32 vs exact) among the '
+                 'ill-conditioned splits, over every set:', '']
+        lines += md_table(
+            ['set', 'split', 'classes', 'delta95', 'sweep FPR@95',
+             'f32 FPR@95', 'exact FPR@95'],
+            [(lbl, name, classes, f'{d95:.2g}', fmt(sweepv), fmt(f32v),
+              fmt(exactv))
+             for lbl, name, classes, d95, sweepv, f32v, exactv in worst])
+    else:
+        lines += ['', 'No split is ill-conditioned (delta95 < '
+                 f'{WELL_CONDITIONED:g}) on any set.']
     lines += ['', 'For these splits, 95% of the OOD points are divided '
              f'only below m ~ {WELL_CONDITIONED:g}. The implemented '
              'float32 score cannot rank points there reliably, so its '

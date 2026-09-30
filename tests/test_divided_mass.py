@@ -374,6 +374,28 @@ def test_group_msp_check_skips_ill_conditioned_splits():
     print('test_group_msp_check_skips_ill_conditioned_splits passed')
 
 
+def test_worst_float32_ties_excludes_well_conditioned_splits():
+    # A well-conditioned split (delta95 = 1e-3) with a huge f32-vs-exact
+    # gap must never appear in the worst-gap rows, even though its gap
+    # dwarfs the ill-conditioned split's: worst_float32_ties has to filter
+    # on delta95 before sorting/slicing to top, not sort first and hope the
+    # ill-conditioned ones happen to win on gap size alone.
+    well = dict(name='s_well', group_A='car', delta95=1e-3,
+               gmsp_fpr95=10.0, f32_fpr95=100.0, exact_fpr95=10.0)
+    ill = dict(name='s_ill', group_A='bicycle', delta95=1e-9,
+              gmsp_fpr95=89.0, f32_fpr95=100.0, exact_fpr95=80.43)
+    sets = {'test': dict(label='Test')}
+
+    rows = dm.worst_float32_ties({'test': [well, ill]}, sets)
+    names = [r[1] for r in rows]  # row: (label, name, classes, delta95, ...)
+    assert names == ['s_ill'], names
+
+    # No ill-conditioned split anywhere: empty, not a crash and not a
+    # well-conditioned split standing in for one.
+    assert dm.worst_float32_ties({'test': [well]}, sets) == []
+    print('test_worst_float32_ties_excludes_well_conditioned_splits passed')
+
+
 def test_run_end_to_end():
     with tempfile.TemporaryDirectory() as tmp:
         root = _fake_root(tmp)
@@ -481,6 +503,7 @@ if __name__ == '__main__':
     test_zero_divided_counts()
     test_tsv_round_trip()
     test_group_msp_check_skips_ill_conditioned_splits()
+    test_worst_float32_ties_excludes_well_conditioned_splits()
     test_run_end_to_end()
     test_missing_inputs_are_explained()
     print('ALL TESTS PASSED')
