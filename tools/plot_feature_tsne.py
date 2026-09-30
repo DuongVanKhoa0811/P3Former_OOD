@@ -3,7 +3,7 @@
 ID classes.
 
 Per set (Cetran, Test, Test + Cetran) it draws up to --per-class ID points
-of every class and --ood OOD points from the samples of
+of every class and up to --ood OOD points from the samples of
 tools/extract_point_features.py, each in proportion to its weight,
 L2-normalises the features (as the kNN of tools/ood_class_resemblance.py),
 reduces them to 50 dimensions with PCA and embeds them with t-SNE
@@ -122,12 +122,19 @@ def tsne_figure(panels, stem):
         for raw_id, (marker, _) in OOD_MARKERS.items():
             sel = ood & (raw == raw_id)
             ax.scatter(xy[sel, 0], xy[sel, 1], s=4, marker=marker,
-                       color=OOD_COLOUR, linewidths=0.4, zorder=5)
+                       color=OOD_COLOUR, alpha=0.7, linewidths=0.4, zorder=5)
+        x0, x1 = ax.get_xlim()
         for c, name in enumerate(sb.CLASSES):
             sel = (label == c) & ~ood
             if sel.sum() >= 5:
                 mx, my = label_position(xy, np.flatnonzero(sel))
-                ax.text(mx, my, name, fontsize=4.8, ha='center', va='center',
+                if mx > x1 - 0.15 * (x1 - x0):
+                    ha = 'right'
+                elif mx < x0 + 0.15 * (x1 - x0):
+                    ha = 'left'
+                else:
+                    ha = 'center'
+                ax.text(mx, my, name, fontsize=4.8, ha=ha, va='center',
                         color=CLASS_COLOURS[name], zorder=6,
                         path_effects=[pe.withStroke(linewidth=1.4,
                                                     foreground='white')])
@@ -166,7 +173,7 @@ def main():
     ap.add_argument('--space', choices=res.SPACES, default='full')
     ap.add_argument('--per-class', type=int, default=300,
                     help='ID points per class and set')
-    ap.add_argument('--ood', type=int, default=3000,
+    ap.add_argument('--ood', type=int, default=1000,
                     help='OOD points per set')
     ap.add_argument('--seed', type=int, default=0)
     args = ap.parse_args()

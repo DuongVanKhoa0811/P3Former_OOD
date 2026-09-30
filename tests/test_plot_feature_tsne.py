@@ -53,16 +53,65 @@ def test_tsne_figure_smoke():
     print('test_tsne_figure_smoke passed')
 
 
+def test_class_names_stay_inside_the_figure():
+    import matplotlib.patches
+    import plot_divided_mass as pdm  # noqa: E402
+
+    rng = np.random.RandomState(0)
+    # One class at far left, one at far right with a long name
+    xy_left = np.hstack([
+        -50 + 0.1 * rng.randn(50, 1),
+        rng.randn(50, 1)
+    ])
+    xy_right = np.hstack([
+        50 + 0.1 * rng.randn(50, 1),
+        rng.randn(50, 1)
+    ])
+    xy = np.vstack([xy_left, xy_right])
+    label = np.concatenate([np.zeros(50), np.ones(50)])
+    raw = np.ones(100)
+    ood = np.zeros(100, dtype=bool)
+
+    panels = OrderedDict([('Panel', (xy, label, raw, ood))])
+
+    # Monkeypatch pdm.save to capture the figure
+    saved_figs = []
+    original_save = pdm.save
+    def mock_save(fig, stem):
+        saved_figs.append(fig)
+    pdm.save = mock_save
+
+    try:
+        tsne.tsne_figure(panels, 'dummy_stem')
+        assert len(saved_figs) == 1, 'pdm.save was not called'
+        fig = saved_figs[0]
+        fig.canvas.draw()
+
+        # Check that all text extents are within figure bounds
+        fig_bbox = fig.bbox
+        for text in fig.texts:
+            extent = text.get_window_extent(renderer=fig.canvas.get_renderer())
+            assert extent.xmin >= fig_bbox.xmin - 1, \
+                f'Text "{text.get_text()}" extends left of figure (xmin={extent.xmin}, fig={fig_bbox.xmin})'
+            assert extent.xmax <= fig_bbox.xmax + 1, \
+                f'Text "{text.get_text()}" extends right of figure (xmax={extent.xmax}, fig={fig_bbox.xmax})'
+    finally:
+        pdm.save = original_save
+
+    print('test_class_names_stay_inside_the_figure passed')
+
+
 def test_label_position_picks_the_main_cluster():
     rng = np.random.RandomState(0)
-    # Class 0: dense cluster near (0, 0) with 30 points, sparse cluster near (10, 10) with 10 points
-    cluster_0_main = 0.1 * rng.randn(30, 2)
-    cluster_0_sparse = (10, 10) + 0.1 * rng.randn(10, 2)
-    class_0 = np.vstack([cluster_0_main, cluster_0_sparse])
-    # Class 1: 30 points near (5, -5)
-    class_1 = (5, -5) + 0.1 * rng.randn(30, 2)
+    # Class 0, first block: 20 points at (10, 10) + 0.1*randn (contaminated, listed FIRST)
+    cluster_0_contaminated = (10, 10) + 0.1 * rng.randn(20, 2)
+    # Class 0, second block: 20 points at (0, 0) + 0.1*randn (clean main cluster)
+    cluster_0_main = 0.1 * rng.randn(20, 2)
+    class_0 = np.vstack([cluster_0_contaminated, cluster_0_main])
+    # Class 1: 60 points at (10, 10) + 0.5*randn (surrounding the contaminated cluster)
+    class_1 = (10, 10) + 0.5 * rng.randn(60, 2)
     xy = np.vstack([class_0, class_1])
-    members = np.arange(40)  # indices of class 0 (30 + 10)
+    members = np.arange(40)  # indices of class 0 (20 + 20)
     label = tsne.label_position(xy, members)
     # Assert label lies within 1.0 of (0, 0), where the main cluster is
     assert np.linalg.norm(label) < 1.0, f'label {label} is too far from (0, 0)'
@@ -75,5 +124,6 @@ def test_label_position_picks_the_main_cluster():
 if __name__ == '__main__':
     test_class_colours()
     test_tsne_figure_smoke()
+    test_class_names_stay_inside_the_figure()
     test_label_position_picks_the_main_cluster()
     print('ALL TESTS PASSED')
