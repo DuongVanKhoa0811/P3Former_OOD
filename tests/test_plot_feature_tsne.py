@@ -55,17 +55,24 @@ def test_tsne_figure_smoke():
 
 
 def test_class_names_stay_inside_the_figure():
-    # Long names at the far left and far right of each of three panels (the
-    # real layout): centred, they would run past the figure edge.
+    # 'perimeter-barrier' and 'overhead-bridge' sit exactly at the data
+    # extreme (x = -50 / +50, not just near it), so label_position must
+    # return that exact x for every member and a centred name is provably
+    # off the panel rather than a hair inside it; 'car' fills the rest of
+    # the panel between them. Three panels, the real layout.
     rng = np.random.RandomState(0)
-    n = 40
     left = sb.CLASSES.index('perimeter-barrier')
     right = sb.CLASSES.index('overhead-bridge')
-    xy = np.vstack([np.column_stack([-50 + rng.randn(n), rng.randn(n)]),
-                    np.column_stack([50 + rng.randn(n), rng.randn(n)])])
-    label = np.repeat([left, right], n)
-    ood = np.zeros(2 * n, bool)
-    raw = np.ones(2 * n, int)
+    car = sb.CLASSES.index('car')
+    xy = np.vstack([
+        np.column_stack([np.full(5, -50.0), rng.randn(5)]),
+        np.column_stack([np.full(5, 50.0), rng.randn(5)]),
+        np.column_stack([rng.uniform(-40, 40, 40), rng.randn(40)]),
+    ])
+    label = np.concatenate([np.full(5, left), np.full(5, right),
+                            np.full(40, car)])
+    ood = np.zeros(50, bool)
+    raw = np.ones(50, int)
     panels = OrderedDict((name, (xy, label, raw, ood))
                          for name in ('Cetran', 'Test', 'Test + Cetran'))
     captured = {}
@@ -78,7 +85,7 @@ def test_class_names_stay_inside_the_figure():
             fig.canvas.draw()
             renderer = fig.canvas.get_renderer()
             names = [t for ax in fig.axes for t in ax.texts]
-            assert len(names) == 6
+            assert len(names) == 9
             for t in names:
                 box = t.get_window_extent(renderer)
                 assert (box.x0 >= fig.bbox.x0 - 1
