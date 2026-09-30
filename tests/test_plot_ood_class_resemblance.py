@@ -1,4 +1,4 @@
-"""Smoke test for tools/plot_ood_class_resemblance.py (synthetic tables).
+"""Tests for tools/plot_ood_class_resemblance.py (synthetic tables).
 
 Run from the repo root:
     /home/khoadv/miniconda3/envs/p3former/bin/python tests/test_plot_ood_class_resemblance.py
@@ -31,8 +31,13 @@ def test_figures_are_written():
                 dm.write_tsv(os.path.join(tmp, f'profile_{key}_{space}.tsv'), [
                     OrderedDict([
                         ('class', name), ('bank', 40), ('queries', 20),
-                        ('r_ood', float(shares[c])),
-                        ('r_id', float(rng.uniform(0, 8))),
+                        # class 5 ('person') is absent from the bank on
+                        # every set/space, same as a real excluded class:
+                        # NaN r_ood/r_id, a normal, finite improvement.
+                        ('r_ood', float('nan') if c == 5
+                         else float(shares[c])),
+                        ('r_id', float('nan') if c == 5
+                         else float(rng.uniform(0, 8))),
                         ('contrast', float(rng.uniform(0, 5))),
                         ('feat_div_ood', float(rng.uniform(0.1, 60))),
                         ('feat_div_id', 0.0 if c == 3 else float(rng.uniform(0.1, 10))),
@@ -73,6 +78,23 @@ def test_figures_are_written():
     print('test_figures_are_written passed')
 
 
+def test_label_x_clears_the_bar_and_the_marker():
+    import matplotlib
+    matplotlib.use('Agg')
+    import plot_ood_class_resemblance as pcr
+
+    # no marker: the old behaviour, bar end + margin
+    assert pcr.label_x(3.0, None, 0.5) == 3.5
+    # marker beyond the bar: text clears the marker, not just the bar
+    x = pcr.label_x(3.0, 7.0, 0.5)
+    assert x == 7.5 and x > 3.0 and x > 7.0
+    # bar beyond the marker: text clears the bar, not just the marker
+    x = pcr.label_x(7.0, 3.0, 0.5)
+    assert x == 7.5 and x > 3.0 and x > 7.0
+    print('test_label_x_clears_the_bar_and_the_marker passed')
+
+
 if __name__ == '__main__':
     test_figures_are_written()
+    test_label_x_clears_the_bar_and_the_marker()
     print('ALL TESTS PASSED')

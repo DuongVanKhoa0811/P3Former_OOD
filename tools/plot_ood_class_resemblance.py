@@ -11,17 +11,24 @@ them, as PDF and PNG in the style of tools/plot_divided_mass.py:
                                        {c} | rest's improvement, and of
                                        r_ID (grey); the appearance-space
                                        r_OOD as hollow circles (full space
-                                       only); no preference (100/24 %) dashed
+                                       only); no preference (100/24 %)
+                                       dashed; a class with no ID samples
+                                       in the set's kNN bank (NaN r_OOD /
+                                       r_ID) as a grey x at 0 with a 'not
+                                       in the bank' label, never as a
+                                       0 % bar
     bubble_feature_singletons_<space>  ID (x) against OOD (y)
                                        feature-divided % of the single-class
                                        splits, area = |improvement|: the
                                        feature-space twin of
                                        bubble_singletons
-    hypothesis_<space>                 improvement against R_A ("together")
-                                       and against the OOD feature-divided
-                                       % ("cut through") over every split,
-                                       robust splits highlighted, Spearman
-                                       rho in the titles
+    hypothesis_<space>                 improvement against R_A ("together"),
+                                       the OOD feature-divided % ("cut
+                                       through") and the log OOD/ID
+                                       feature-divided ratio ("cut through
+                                       (ratio)") over every split, robust
+                                       splits highlighted, Spearman rho in
+                                       the titles
 
 Run from the repo root:
     python tools/plot_ood_class_resemblance.py [RESEMBLANCE_DIR] [--space full]
@@ -60,39 +67,89 @@ def load(res_dir, space):
     return labels, profiles, appearance, splits, read('rho.tsv')
 
 
+def label_x(bar_end, marker_x, margin):
+    """x position for a row's text label (an improvement value, or the
+    'not in the bank' caption): to the right of both ``bar_end`` (the
+    row's full-space bar end, 0 for a class with no bar) and ``marker_x``
+    (the appearance-space marker, or None when the panel has none for this
+    class), plus ``margin`` -- so the text never sits on the marker."""
+    base = bar_end if marker_x is None else max(bar_end, marker_x)
+    return base + margin
+
+
 def profile_figure(labels, profiles, appearance, stem):
-    """One panel per set, classes in one order (by r_OOD on the last set)."""
+    """One panel per set, classes in one order (by r_OOD on the last set).
+    A class with no ID samples in the set's kNN bank has NaN r_ood / r_id
+    (tools/ood_class_resemblance.py's 'excluded' classes): its row gets no
+    bar and no appearance marker -- only a grey x at 0 and a grey 'not in
+    the bank' caption, so it is never mistaken for an actual 0 % share."""
     last = list(profiles)[-1]
     order = [r['class'] for r in sorted(
         profiles[last], key=lambda r: np.nan_to_num(r['r_ood'], nan=-1.0))]
     y = np.arange(len(order))
+    row_y = dict(zip(order, y))
     xmax = max(max(np.nan_to_num(r['r_ood']), np.nan_to_num(r['r_id']))
                for rows in profiles.values() for r in rows)
+    margin = 0.015 * xmax
+
+    # One pass to gather every row's bar / marker / text data and the
+    # widest text position, before any drawing: the shared x limit (below)
+    # depends on it, and every panel must use the same one.
+    panel_rows, text_max, any_absent = OrderedDict(), 0.0, False
+    for key, rows in profiles.items():
+        by = {r['class']: r for r in rows}
+        app = ({r['class']: float(r['r_ood']) for r in appearance[key]
+               if not np.isnan(r['r_ood'])} if key in appearance else {})
+        info = []
+        for c in order:
+            nan = bool(np.isnan(by[c]['r_ood']))
+            any_absent = any_absent or nan
+            marker_x = None if nan else app.get(c)
+            bar_end = 0.0 if nan else by[c]['r_ood']
+            tx = label_x(bar_end, marker_x, margin)
+            text_max = max(text_max, tx)
+            info.append(dict(c=c, nan=nan, r_ood=by[c]['r_ood'],
+                             r_id=by[c]['r_id'], marker_x=marker_x,
+                             improvement=by[c]['improvement'], text_x=tx))
+        panel_rows[key] = info
+    x_upper = max(xmax * 1.3, text_max + margin)
+
     fig, axes = plt.subplots(1, len(profiles), figsize=(7.0, 4.8),
                              sharey=True, squeeze=False)
-    for ax, (key, rows) in zip(axes[0], profiles.items()):
-        by = {r['class']: r for r in rows}
-        r_ood = [float(np.nan_to_num(by[c]['r_ood'])) for c in order]
-        r_id = [float(np.nan_to_num(by[c]['r_id'])) for c in order]
-        imp = [by[c]['improvement'] for c in order]
-        edge = [pdm.GAIN if v > 0 else pdm.DROP for v in imp]
-        ax.barh(y + 0.2, r_ood, height=0.4, color=[pdm.tint(c) for c in edge],
-                edgecolor=edge, linewidth=0.6)
-        ax.barh(y - 0.2, r_id, height=0.4, color='0.85', edgecolor='0.55',
+    for ax, key in zip(axes[0], panel_rows):
+        present = [r for r in panel_rows[key] if not r['nan']]
+        absent = [r for r in panel_rows[key] if r['nan']]
+        edge = [pdm.GAIN if r['improvement'] > 0 else pdm.DROP
+               for r in present]
+        ax.barh([row_y[r['c']] + 0.2 for r in present],
+                [r['r_ood'] for r in present], height=0.4,
+                color=[pdm.tint(e) for e in edge], edgecolor=edge,
                 linewidth=0.6)
-        if key in appearance:
-            app = {r['class']: float(np.nan_to_num(r['r_ood']))
-                   for r in appearance[key]}
-            ax.scatter([app[c] for c in order], y + 0.2, s=10,
+        ax.barh([row_y[r['c']] - 0.2 for r in present],
+                [r['r_id'] for r in present], height=0.4, color='0.85',
+                edgecolor='0.55', linewidth=0.6)
+        marked = [r for r in present if r['marker_x'] is not None]
+        if marked:
+            ax.scatter([r['marker_x'] for r in marked],
+                       [row_y[r['c']] + 0.2 for r in marked], s=10,
                        facecolor='none', edgecolor='black', linewidths=0.6,
                        zorder=4)
-        for yi, x, v in zip(y, r_ood, imp):
-            ax.text(x + 0.015 * xmax, yi + 0.2, pdm.signed(v), va='center',
-                    fontsize=5.5,
-                    color=pdm.GAIN_TXT if v > 0 else pdm.DROP_TXT)
+        for r in present:
+            ax.text(r['text_x'], row_y[r['c']] + 0.2,
+                    pdm.signed(r['improvement']), va='center', fontsize=5.5,
+                    color=pdm.GAIN_TXT if r['improvement'] > 0
+                    else pdm.DROP_TXT)
+        if absent:
+            ax.scatter([0.0] * len(absent),
+                       [row_y[r['c']] for r in absent], marker='x', s=18,
+                       color=pdm.NA, linewidths=0.8, zorder=4)
+            for r in absent:
+                ax.text(r['text_x'], row_y[r['c']],
+                        f"not in the bank ({pdm.signed(r['improvement'])})",
+                        va='center', fontsize=5.5, color=pdm.NA)
         ax.axvline(100.0 / sb.NUM_CLASSES, color='0.4', ls=(0, (3, 2)),
                    lw=0.6)
-        ax.set_xlim(0, xmax * 1.3)
+        ax.set_xlim(0, x_upper)
         ax.set_title(labels[key], loc='left')
         ax.set_xlabel('share of the neighbours (%)')
         ax.grid(axis='x', color='0.9', lw=0.4)
@@ -115,6 +172,10 @@ def profile_figure(labels, profiles, appearance, stem):
         handles.append(Line2D([], [], ls='none', marker='o', markersize=3.5,
                               markerfacecolor='none', markeredgecolor='black'))
         names.append(r'$r_\mathrm{OOD}$, appearance space')
+    if any_absent:
+        handles.append(Line2D([], [], ls='none', marker='x', markersize=5,
+                              markeredgecolor=pdm.NA, markeredgewidth=0.8))
+        names.append("class absent from the set's ID points")
     fig.legend(handles, names, loc='lower center', ncol=2, frameon=False)
     fig.subplots_adjust(left=0.15, right=0.99, top=0.95, bottom=0.2,
                         wspace=0.08)
@@ -132,7 +193,15 @@ def feature_bubbles(labels, profiles, stem):
 
 
 def hypothesis_figure(labels, splits, rho, space, stem):
-    fig, axes = plt.subplots(len(splits), 2, figsize=(7.0, 7.6),
+    # The 3-column titles include the longest set label ('Test + Cetran')
+    # and the longest column name ('cut through (ratio)'): at the shared
+    # STYLE title size (8.5 pt) that string alone renders about 2.05 in
+    # wide (measured), wider than a 7.0-in-wide, 3-column panel can fit
+    # without starving the gaps every other title needs; title_fontsize
+    # (scoped to this figure only, not pdm.STYLE) is the smallest change
+    # that keeps every title on one line and clear of its neighbours.
+    title_fontsize = 7.0
+    fig, axes = plt.subplots(len(splits), 3, figsize=(7.0, 8.4),
                              squeeze=False)
     for i, (key, rows) in enumerate(splits.items()):
         sel = {r['x']: r['rho'] for r in rho if r['set'] == key
@@ -143,7 +212,9 @@ def hypothesis_figure(labels, splits, rho, space, stem):
         for j, (x, name, xlabel) in enumerate((
                 ('R_A', 'together', r'$R_A$: OOD resemblance on the smaller '
                  'side (%)'),
-                ('feat_div_ood', 'cut through', 'OOD feature-divided (%)'))):
+                ('feat_div_ood', 'cut through', 'OOD feature-divided (%)'),
+                ('feat_log_ratio', 'cut through (ratio)',
+                 'log10 OOD/ID feature-divided ratio'))):
             ax = axes[i, j]
             ax.scatter([r[x] for r in other], [r['improvement'] for r in other],
                        s=5, color='0.72', linewidths=0)
@@ -152,7 +223,8 @@ def hypothesis_figure(labels, splits, rho, space, stem):
                        color=pdm.GAIN, linewidths=0)
             ax.axhline(0.0, color='0.4', lw=0.6)
             ax.set_title(f'{labels[key]}, {name}: ' + r'$\rho$ = '
-                         + dm.fmt(sel.get(x, float('nan'))), loc='left')
+                         + dm.fmt(sel.get(x, float('nan'))), loc='left',
+                        fontsize=title_fontsize)
             ax.set_xlabel(xlabel)
             if j == 0:
                 ax.set_ylabel('improvement')
@@ -164,8 +236,8 @@ def hypothesis_figure(labels, splits, rho, space, stem):
                       color=pdm.GAIN)]
     fig.legend(handles, ['splits', 'robust splits (improvement > 0 on every '
                          'set)'], loc='lower center', ncol=2, frameon=False)
-    fig.subplots_adjust(left=0.09, right=0.98, top=0.96, bottom=0.09,
-                        hspace=0.55, wspace=0.18)
+    fig.subplots_adjust(left=0.07, right=0.99, top=0.965, bottom=0.075,
+                        hspace=0.6, wspace=0.28)
     pdm.save(fig, stem)
 
 
