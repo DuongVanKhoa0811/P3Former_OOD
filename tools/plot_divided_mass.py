@@ -109,6 +109,21 @@ LABEL_ZORDER = 1000
 # below it.
 ROBUST_KEY_FONTSIZE = 6.0
 ROBUST_KEY_WRAP_CHARS = 60
+# Important 2: the size key's ``handlelength``/``handleheight`` are in units
+# of its own legend fontsize, but the markers _bubble_handle draws are a
+# fixed point size (sqrt(area(v))) independent of that fontsize -- shrinking
+# the fontsize without separately sizing the handle box let the widest
+# marker (SIZE_KEY's largest value) overlap the row above it. SIZE_HANDLE_
+# MARGIN is the point-space slack (as the unshrunk key already had, at its
+# unshrunk fontsize) added around that marker's own diameter.
+SIZE_HANDLE_MARGIN = 2.0
+# Important 3 (Ruling 20): --top above this overruns the legend cell -- the
+# key would run into the colour and size keys below it, however long the
+# names/classes lists are (checked against the real robust.tsv: even its
+# longest names, at --top 12, comfortably clear them; --top 10 leaves more
+# room still, which is the point of choosing 10 here rather than the most
+# that happens to fit).
+MAX_TOP = 10
 
 
 def tint(colour, k=0.35):
@@ -172,8 +187,17 @@ def _annotate(ax, item, angle, gap, fontsize, leader, renderer):
     dx, dy = dist * math.cos(th), dist * math.sin(th)
     ha = 'left' if dx > 0.3 * dist else 'right' if dx < -0.3 * dist else 'center'
     va = 'bottom' if dy > 0.3 * dist else 'top' if dy < -0.3 * dist else 'center'
+    # F1 fix-up: ax.annotate's own zorder= reaches the Text but, in the
+    # pinned matplotlib (3.5.3), not the separate FancyArrowPatch that
+    # arrowprops creates for the leader line -- Annotation.set_zorder does
+    # not propagate to ann.arrow_patch, which otherwise keeps the Patch
+    # default (1), well under a bubble. Putting zorder in arrowprops itself
+    # is what actually reaches the patch (verified: a post-hoc
+    # ann.arrow_patch.set_zorder(...) also works, but this needs no
+    # existence check and cannot run before arrow_patch exists).
     arrow = (dict(arrowstyle='-', lw=0.4, color=item['colour'], shrinkA=0,
-                  shrinkB=item['radius']) if leader else None)
+                  shrinkB=item['radius'], zorder=LABEL_ZORDER)
+            if leader else None)
     ann = ax.annotate(item['text'], (item['x'], item['y']), xytext=(dx, dy),
                       textcoords='offset points', ha=ha, va=va,
                       multialignment=ha, color=item['colour'],
@@ -346,6 +370,13 @@ def _bubble_handle(colour, value, face=True):
                   markeredgecolor=colour, markeredgewidth=1.0)
 
 
+def _size_handle_span(fontsize, margin=SIZE_HANDLE_MARGIN):
+    """``handlelength``/``handleheight`` (in ``fontsize`` units) that
+    contain the widest ``SIZE_KEY`` marker with ``margin`` points to
+    spare, at ``fontsize``."""
+    return (math.sqrt(area(max(SIZE_KEY))) + margin) / fontsize
+
+
 def _wrap_robust_key(robust, width):
     """``robust`` ([(rank, name, classes)]) as 'k  name: classes' lines,
     each entry wrapped to ``width``. ``break_long_words`` and
@@ -408,10 +439,34 @@ def legend_cell(ax, star=False, background=False, zeros=False, robust=None):
     first = ax.legend(handles, labels, loc='lower left', frameon=False,
                       handletextpad=0.4, borderaxespad=0.15, fontsize=5.5)
     ax.add_artist(first)
+    # Important 2: ncol=1 (one marker per row) let the widest marker
+    # overlap the row above/below it once the row height shrank with the
+    # fontsize; back to one row of ncol=len(SIZE_KEY) markers side by
+    # side (as the unshrunk key uses), with handlelength/handleheight
+    # sized to that row's own tallest marker, and enough labelspacing /
+    # borderpad that the title clears it too.
+    size_fontsize = 5.5
+    size_span = _size_handle_span(size_fontsize)
     ax.legend(size_handles, size_labels, title=size_title, loc='lower right',
-              ncol=1, frameon=False, handlelength=2.0, handleheight=2.0,
-              columnspacing=0.6, borderaxespad=0.15, fontsize=5.5,
-              title_fontsize=5.5)
+              ncol=len(SIZE_KEY), frameon=False, handlelength=size_span,
+              handleheight=size_span, columnspacing=0.8, borderaxespad=0.15,
+              labelspacing=1.3, borderpad=0.3, fontsize=size_fontsize,
+              title_fontsize=size_fontsize)
+
+
+def _panel_star_values(panels, stars=None):
+    """(xs, ys): every point's x/y across ``panels``, plus every star's
+    x/y -- the shared starting point of both :func:`foreground_limits` and
+    ``bubble_grid``'s own default axis limits (Minor: the two used to
+    repeat this loop; ``bubble_grid``'s default is this plus the
+    backgrounds)."""
+    stars = stars or {}
+    xs = [p['x'] for pts in panels.values() for p in pts]
+    ys = [p['y'] for pts in panels.values() for p in pts]
+    for x, y in stars.values():
+        xs.append(x)
+        ys.append(y)
+    return xs, ys
 
 
 def bubble_grid(panels, xlabel, ylabel, stem, stars=None, backgrounds=None,
@@ -420,24 +475,23 @@ def bubble_grid(panels, xlabel, ylabel, stem, stars=None, backgrounds=None,
     a legend cell; the log axes are the same in every panel.
 
     ``xlim`` / ``ylim`` override the default axis limits (every panel's
-    points, plus ``stars`` and ``backgrounds``) when given -- e.g.
+    points, plus ``stars`` and ``backgrounds``) when given -- both, never
+    only one (a ValueError otherwise, since a limit computed from half the
+    override and half the default would not mean anything) -- e.g.
     :func:`bubble_robust` passes the robust-only limits from
     :func:`foreground_limits` (F3), so the background dots cannot stretch
     them. ``notes``: label -> a short string drawn inside that panel's own
     axes (F5, e.g. plot_ood_class_resemblance.py's skipped-class count).
     ``robust_key``: forwarded to :func:`legend_cell` (F2)."""
     stars, backgrounds, notes = stars or {}, backgrounds or {}, notes or {}
-    if xlim is None or ylim is None:
-        xs = [p['x'] for pts in panels.values() for p in pts]
-        ys = [p['y'] for pts in panels.values() for p in pts]
-        for x, y in stars.values():
-            xs.append(x)
-            ys.append(y)
+    if (xlim is None) != (ylim is None):
+        raise ValueError('bubble_grid needs both xlim and ylim, or neither')
+    if xlim is None:
+        xs, ys = _panel_star_values(panels, stars)
         for points in backgrounds.values():
             xs += [x for x, _ in points]
             ys += [y for _, y in points]
-        xlim = log_limits(xs) if xlim is None else xlim
-        ylim = log_limits(ys) if ylim is None else ylim
+        xlim, ylim = log_limits(xs), log_limits(ys)
     fig, axes = plt.subplots(2, 2, figsize=(7.0, 7.6))
     fig.subplots_adjust(left=0.09, right=0.97, top=0.94, bottom=0.07,
                         wspace=0.24, hspace=0.32)
@@ -524,12 +578,7 @@ def foreground_limits(panels, stars=None):
     splits it also draws span down to a fraction of a percent; including
     them in the shared log limits squeezed the robust bubbles into the top
     of the panel."""
-    stars = stars or {}
-    xs = [p['x'] for pts in panels.values() for p in pts]
-    ys = [p['y'] for pts in panels.values() for p in pts]
-    for x, y in stars.values():
-        xs.append(x)
-        ys.append(y)
+    xs, ys = _panel_star_values(panels, stars)
     return log_limits(xs), log_limits(ys)
 
 
@@ -610,10 +659,15 @@ def main():
     ap.add_argument('--threshold', type=float, default=dm.HEADLINE,
                     help=f'divided threshold of the bubble charts: {choices}')
     ap.add_argument('--top', type=int, default=8,
-                    help='robust splits named in bubble_robust')
+                    help='robust splits named in bubble_robust '
+                    f'(max {MAX_TOP})')
     args = ap.parse_args()
     if args.threshold not in dm.DELTAS:
         ap.error(f'--threshold must be one of {choices}')
+    if args.top > MAX_TOP:
+        ap.error(f'--top must be at most {MAX_TOP}: the legend cell has '
+                 f'room for only {MAX_TOP} named entries; robust.tsv lists '
+                 'every robust split')
     plt.rcParams.update(STYLE)
     tables, labels, flat, rho = load(args.divided_dir)
     key = dm.delta_key(args.threshold)

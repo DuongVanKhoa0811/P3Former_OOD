@@ -170,28 +170,60 @@ def test_labels_are_drawn_above_every_bubble():
     3 + its rank among the panel's points (largest first), which used to
     reach and then pass the labels' own fixed zorder (10) from the 8th
     bubble on, covering them (bubble_singletons_0.05.png's 'building',
-    'vegetation' and 'perimeter-barrier'). Every label must now sit above
-    every bubble, however many a panel has."""
+    'vegetation' and 'perimeter-barrier'). Every label -- and, separately,
+    its leader line where place_labels pushes it away from a crowded
+    bubble -- must now sit above every bubble, however many a panel has.
+
+    Reuses the dense 'test' singleton panel (real panel size, real title;
+    see test_dense_singletons_fit_and_refine_does_not_worsen_overlap
+    below) because it reliably produces leader lines (confirmed: 10 of
+    its 24 labels get one), unlike a sparser layout where every label
+    fits at zero gap and there is no arrow_patch to check at all. This
+    matters because matplotlib 3.5's ax.annotate(..., zorder=...) reaches
+    the Text but not the separate FancyArrowPatch arrowprops creates for
+    the leader line, which used to keep the Patch default zorder (1),
+    under every bubble -- confirmed to fail before the fix (arrow zorder
+    1, text zorder 1000, both under the code's own eyes) by temporarily
+    reverting _annotate's arrowprops to drop its ``zorder`` key."""
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
 
     import plot_divided_mass as pdm
 
-    fig, ax = plt.subplots(figsize=(6, 5))
-    xy = [(10 ** (0.15 * i - 1), 10 ** (1.4 - 0.15 * i)) for i in range(12)]
-    points = [dict(x=x, y=y, value=5 + i, text=f'class {i}')
-             for i, (x, y) in enumerate(xy)]
-    xlim = pdm.log_limits([x for x, _ in xy])
-    ylim = pdm.log_limits([y for _, y in xy])
-    items = pdm.bubble_panel(ax, points, xlim, ylim)
-    pdm.place_labels(ax, items)
+    with tempfile.TemporaryDirectory() as tmp:
+        _fake_divided_dir(tmp)
+        rows = dm.read_tsv(os.path.join(tmp, 'test.tsv'))
+        flat = dm.read_tsv(os.path.join(tmp, 'flat.tsv'))
+    key = dm.delta_key(dm.HEADLINE)
+    points = [dict(x=r[f'id_div@{key}'], y=r[f'ood_div@{key}'],
+                    value=r['improvement'], text=r['group_A'])
+              for r in rows if r['size_A'] == 1]
+    star = next((row[f'id_unc@{key}'], row[f'ood_unc@{key}']) for row in flat
+                if row['set'] == dm.SETS['test']['label'])
+    xlim = pdm.log_limits([p['x'] for p in points] + [star[0]])
+    ylim = pdm.log_limits([p['y'] for p in points] + [star[1]])
+
+    fig, axes = plt.subplots(2, 2, figsize=(7.0, 7.6))
+    ax = axes[0, 0]
+    items = pdm.bubble_panel(ax, points, xlim, ylim, star=star)
+    ax.set_title('(a) Test', loc='left')
+    pdm.place_labels(ax, items, star=star)
+
     bubble_zorders = [c.get_zorder() for c in ax.collections]
     text_zorders = [t.get_zorder() for t in ax.texts]
-    assert len(points) >= 8 and len(text_zorders) == len(points)
+    leader_zorders = [t.arrow_patch.get_zorder() for t in ax.texts
+                      if t.arrow_patch is not None]
+    assert len(text_zorders) == len(points)
+    assert leader_zorders, ('fixture produced no leader lines to check -- '
+                            'not a meaningful test of F1')
     assert min(text_zorders) > max(bubble_zorders), (text_zorders,
                                                       bubble_zorders)
+    assert min(leader_zorders) > max(bubble_zorders), (leader_zorders,
+                                                        bubble_zorders)
     plt.close(fig)
+    print(f'{len(leader_zorders)} leader lines checked, all above every '
+          'bubble')
     print('test_labels_are_drawn_above_every_bubble passed')
 
 
@@ -259,6 +291,96 @@ def test_robust_legend_lists_every_top_name():
     print('test_robust_legend_lists_every_top_name passed')
 
 
+def test_size_handle_span_contains_the_widest_marker():
+    """Important 2 regression: the robust chart's shrunk size key used a
+    fixed handlelength/handleheight (2.0, at fontsize 5.5: an 11 pt row)
+    that did not scale with SIZE_KEY's markers, whose own diameter
+    (sqrt(area(value)), independent of the legend's fontsize) reaches
+    21.9 pt for the largest -- so with ncol=1 (one marker per row) the
+    '40' circle overlapped the '20' row above it and clipped its numeral
+    (bubble_robust_0.05.png's legend cell; confirmed by direct render --
+    see the task report for the crop). _size_handle_span's whole point is
+    to keep the handle box at least as large as that marker, in points, at
+    whatever fontsize legend_cell shrinks the size key to; this checks the
+    invariant directly rather than through matplotlib's own legend layout
+    (Line2D.get_window_extent's *width* for a marker-only handle reflects
+    its handle-box slot, not the rendered marker, so a geometric pairwise-
+    overlap check on it is not a meaningful test here -- confirmed by
+    rendering this exact scenario and inspecting the PNG: no overlap)."""
+    import math
+
+    import plot_divided_mass as pdm
+
+    fontsize = 5.5
+    span_pt = pdm._size_handle_span(fontsize) * fontsize
+    widest_marker_pt = math.sqrt(pdm.area(max(pdm.SIZE_KEY)))
+    assert span_pt > widest_marker_pt, (span_pt, widest_marker_pt)
+    # the previous, broken parameters (ncol=1, handlelength=handleheight=
+    # 2.0) would have failed this same check, confirming it is meaningful
+    broken_span_pt = 2.0 * fontsize
+    assert broken_span_pt < widest_marker_pt, (broken_span_pt,
+                                               widest_marker_pt)
+    print('test_size_handle_span_contains_the_widest_marker passed')
+
+
+def test_top_above_max_is_rejected():
+    """Important 3 / Ruling 20 regression: --top above MAX_TOP used to run
+    the robust key over the colour and size keys (33 robust splits at
+    --top 500 on the real tables). main() now refuses it at the argparse
+    level, naming the cap and robust.tsv; exactly MAX_TOP is still
+    accepted."""
+    import plot_divided_mass as pdm
+    with tempfile.TemporaryDirectory() as tmp:
+        _fake_divided_dir(tmp)
+        proc = subprocess.run(
+            [sys.executable, SCRIPT, tmp, '--top', str(pdm.MAX_TOP + 1)],
+            capture_output=True, text=True, cwd=_REPO_ROOT)
+        assert proc.returncode == 2, proc.stderr
+        assert '--top' in proc.stderr and str(pdm.MAX_TOP) in proc.stderr, (
+            proc.stderr)
+        assert 'robust.tsv' in proc.stderr, proc.stderr
+        proc = subprocess.run(
+            [sys.executable, SCRIPT, tmp, '--top', str(pdm.MAX_TOP)],
+            capture_output=True, text=True, cwd=_REPO_ROOT)
+        assert proc.returncode == 0, proc.stderr
+    print('test_top_above_max_is_rejected passed')
+
+
+def test_robust_panels_handles_top_beyond_count_and_no_robust_splits():
+    """Important 3 (Ruling 20): robust_panels must not error when --top
+    exceeds the number of robust splits that exist (labels all of them)
+    or when there are none at all (labels nothing, an empty key) -- both
+    routine on the real tables at a large --top, or on a set with no
+    robust split."""
+    import plot_divided_mass as pdm
+    with tempfile.TemporaryDirectory() as tmp:
+        _fake_divided_dir(tmp)
+        tables = OrderedDict(
+            (key, dm.read_tsv(os.path.join(tmp, f'{key}.tsv')))
+            for key in dm.SETS)
+    labels = OrderedDict((k, s['label']) for k, s in dm.SETS.items())
+
+    # top (1000) far exceeds the fixture's 2 robust splits: both named.
+    panels, _, key = pdm.robust_panels(tables, labels, dm.HEADLINE, 1000)
+    assert [row[0] for row in key] == [1, 2], key
+    for pts in panels.values():
+        texts = sorted(p['text'] for p in pts if p['text'])
+        assert texts == ['1', '2'], texts
+
+    # no robust splits anywhere: no error, nothing named, every split is
+    # a background dot.
+    no_robust = OrderedDict((k, [dict(r, robust=0) for r in rows])
+                            for k, rows in tables.items())
+    panels, backgrounds, key = pdm.robust_panels(no_robust, labels,
+                                                 dm.HEADLINE, 8)
+    assert key == [], key
+    assert all(pts == [] for pts in panels.values()), panels
+    assert all(len(pts) == len(rows) for pts, rows in
+              zip(backgrounds.values(), no_robust.values()))
+    print('test_robust_panels_handles_top_beyond_count_and_no_robust_splits '
+          'passed')
+
+
 def test_foreground_limits_ignores_far_background_points():
     """F3 regression: bubble_robust's axis limits must come from the
     robust bubbles and the flat-MSP star alone, not the background splits
@@ -282,6 +404,24 @@ def test_foreground_limits_ignores_far_background_points():
                            + [v for _, v in stars.values()] + [background_y])
     assert naive[0] < ylim[0], (naive, ylim)
     print('test_foreground_limits_ignores_far_background_points passed')
+
+
+def test_bubble_grid_requires_both_limits_or_neither():
+    """Minor regression: bubble_grid's ``if xlim is None or ylim is
+    None:`` used to recompute *both* from the defaults whenever only one
+    was missing, silently discarding the other override; passing exactly
+    one is now a clear error rather than a mixed, meaningless limit."""
+    import plot_divided_mass as pdm
+
+    panels = OrderedDict([('Cetran', [dict(x=1.0, y=2.0, value=5.0,
+                                           text='a')])])
+    for kwargs in (dict(xlim=(1, 10)), dict(ylim=(1, 10))):
+        try:
+            pdm.bubble_grid(panels, 'x', 'y', 'stem', **kwargs)
+        except ValueError:
+            continue
+        assert False, f'expected ValueError for {kwargs}'
+    print('test_bubble_grid_requires_both_limits_or_neither passed')
 
 
 def test_bubble_grid_draws_notes_only_in_their_own_panel():
@@ -324,6 +464,10 @@ if __name__ == '__main__':
     test_labels_are_drawn_above_every_bubble()
     test_robust_panels_labels_by_rank()
     test_robust_legend_lists_every_top_name()
+    test_size_handle_span_contains_the_widest_marker()
+    test_top_above_max_is_rejected()
+    test_robust_panels_handles_top_beyond_count_and_no_robust_splits()
     test_foreground_limits_ignores_far_background_points()
+    test_bubble_grid_requires_both_limits_or_neither()
     test_bubble_grid_draws_notes_only_in_their_own_panel()
     print('ALL TESTS PASSED')
