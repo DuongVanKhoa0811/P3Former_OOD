@@ -343,6 +343,37 @@ def test_tsv_round_trip():
     print('test_tsv_round_trip passed')
 
 
+def test_group_msp_check_skips_ill_conditioned_splits():
+    # consistency_checks reads only these fields; a real split_table /
+    # flat_row row carries many more that are irrelevant here.
+    well = dict(delta95=1e-3, f32_auroc=90.0, f32_ap=30.0, f32_fpr95=40.0,
+               gmsp_auroc=90.0, gmsp_ap=30.0, gmsp_fpr95=40.0)
+    # An ill-conditioned split (delta95 = 1e-9): its f32 metrics disagree
+    # with the sweep log by far more than CHECK_TOL on every metric, as on
+    # the real dumps (e.g. {bicycle} on Test: sweep FPR@95 89.20, f32
+    # emulation 100.00). It must not move the Group MSP checks.
+    ill = dict(delta95=1e-9, f32_auroc=100.0, f32_ap=50.0, f32_fpr95=100.0,
+              gmsp_auroc=84.0, gmsp_ap=17.0, gmsp_fpr95=89.0)
+    flat = dict(f32_auroc=90.0, f32_ap=30.0, f32_fpr95=40.0,
+               msp_auroc=90.0, msp_ap=30.0, msp_fpr95=40.0)
+
+    checks = dm.consistency_checks('Test', [well, ill], flat, (2, 0.0))
+    group = [c for c in checks if c['check'].startswith('Group MSP')]
+    assert len(group) == 3
+    for c in group:
+        assert c['status'] == 'PASS', c
+        assert '(1 splits' in c['check'], c['check']
+
+    # The well-conditioned split still holds the check to its tolerance:
+    # move its f32 FPR@95 by 5 points and the fpr95 row must FAIL.
+    moved = dict(well, f32_fpr95=well['f32_fpr95'] + 5.0)
+    checks2 = dm.consistency_checks('Test', [moved, ill], flat, (2, 0.0))
+    fpr_check = next(c for c in checks2
+                     if c['check'].startswith('Group MSP fpr95'))
+    assert fpr_check['status'] == 'FAIL', fpr_check
+    print('test_group_msp_check_skips_ill_conditioned_splits passed')
+
+
 def test_run_end_to_end():
     with tempfile.TemporaryDirectory() as tmp:
         root = _fake_root(tmp)
@@ -449,6 +480,7 @@ if __name__ == '__main__':
     test_several_directories_sum_and_backends_agree()
     test_zero_divided_counts()
     test_tsv_round_trip()
+    test_group_msp_check_skips_ill_conditioned_splits()
     test_run_end_to_end()
     test_missing_inputs_are_explained()
     print('ALL TESTS PASSED')

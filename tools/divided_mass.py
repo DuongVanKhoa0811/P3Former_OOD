@@ -31,8 +31,13 @@ rank by, -max(P_A, P_B) / -max_c p_c in float32 (F2): a float32 just below
 1 has a spacing of 2^-24 ~ 6e-8, so points whose exact m or u falls below
 about that collapse onto the same score and tie, which the exact
 histogram alone would still rank apart. f32_* metrics (from m32 / u32) are
-what is checked against the sweep logs and reported in the float32-tie
-section; exact_* metrics (from m / u) are the tool's own reference.
+what is checked against the sweep logs; exact_* metrics (from m / u) are
+the tool's own reference. Below delta95 = WELL_CONDITIONED (1e-5), 95% of
+a split's OOD points divide only within a few float32 ulps of saturation,
+so neither the tool's f32 metric nor the sweep's own FPR@95 is stable
+enough to check: the Group MSP check covers only splits at or above it,
+and the rest are reported side by side in the float32-tie section
+instead.
 
 Per split and delta it reports the OOD / ID divided counts and shares, the
 divided precision OOD / (OOD + ID divided), the selectivity (OOD retention
@@ -115,6 +120,11 @@ GROUP_KEYS = ('group_msp', 'group_energy', 'group_entropy')
 # differently).
 CHECK_TOL = OrderedDict([('auroc', 0.1), ('ap', 0.1), ('fpr95', 0.5)])
 SINGLETON_TOL = 0.02
+# Below this delta95, 95% of a split's OOD points divide only within a few
+# float32 ulps of saturation (2^-24 ~ 6e-8): the implemented float32 Group
+# MSP score -max(P_A, P_B) cannot rank them reliably, so its FPR@95, like
+# the sweep's own, depends on float32 rounding rather than on the split.
+WELL_CONDITIONED = 1e-5
 STATISTICS = ('ood_div', 'id_div', 'log_ratio', 'precision')
 TARGETS = ('d_auroc', 'd_ap', 'd_fpr95', 'improvement')
 
@@ -560,12 +570,20 @@ def consistency_checks(label, table, flat, agreement):
     """The summary's check rows: worst |difference| against its tolerance,
     PASS or FAIL. Compares the f32-histogram metrics -- which reproduce the
     ties of the float32 score the sweep actually ranks by -- against the
-    sweep log."""
+    sweep log. The three Group MSP rows cover only the splits with
+    delta95 >= WELL_CONDITIONED: below that, both the tool's f32 metric and
+    the sweep's own FPR@95 depend on float32 rounding near saturation, so
+    neither is stable enough to check (worst 0.0 over 0 splits if none
+    qualify -- this cannot happen on real data). The flat MSP rows and the
+    sweep-agreement row are unrestricted."""
     checks = []
+    well = [r for r in table if r['delta95'] >= WELL_CONDITIONED]
     for metric, tol in CHECK_TOL.items():
-        worst = max(abs(r[f'f32_{metric}'] - r[f'gmsp_{metric}'])
-                    for r in table)
-        checks.append((f'Group MSP {metric}, histograms vs sweep', worst, tol))
+        worst = max((abs(r[f'f32_{metric}'] - r[f'gmsp_{metric}'])
+                    for r in well), default=0.0)
+        checks.append((f'Group MSP {metric}, histograms vs sweep '
+                       f'({len(well)} splits, delta95 >= {WELL_CONDITIONED:g})',
+                       worst, tol))
         worst = abs(flat[f'f32_{metric}'] - flat[f'msp_{metric}'])
         checks.append((f'flat MSP {metric}, histograms vs sweep', worst, tol))
     n_common, worst = agreement
@@ -658,24 +676,22 @@ def pct(value):
 
 
 def float32_tie_counts(tables):
-    """Per set: (n splits with |exact_fpr95 - f32_fpr95| beyond CHECK_TOL, n
-    with |exact_auroc - f32_auroc| beyond CHECK_TOL, n splits)."""
+    """Per set: (n splits with delta95 < WELL_CONDITIONED, i.e.
+    ill-conditioned and left out of the Group MSP check, n splits)."""
     out = OrderedDict()
     for key, rows in tables.items():
-        n_fpr = sum(1 for r in rows
-                    if abs(r['exact_fpr95'] - r['f32_fpr95']) > CHECK_TOL['fpr95'])
-        n_auroc = sum(1 for r in rows
-                      if abs(r['exact_auroc'] - r['f32_auroc']) > CHECK_TOL['auroc'])
-        out[key] = (n_fpr, n_auroc, len(rows))
+        n_ill = sum(1 for r in rows if r['delta95'] < WELL_CONDITIONED)
+        out[key] = (n_ill, len(rows))
     return out
 
 
 def worst_float32_ties(tables, sets, top=10):
-    """The ``top`` splits with the largest |exact_fpr95 - f32_fpr95|, over
-    every set: (set label, name, classes, delta95, f32 fpr95, exact fpr95)."""
+    """The ``top`` splits with the largest |exact_fpr95 - f32_fpr95| -- the
+    ill-conditioned ones, delta95 < WELL_CONDITIONED -- over every set: (set
+    label, name, classes, delta95, sweep fpr95, f32 fpr95, exact fpr95)."""
     rows = [(abs(r['exact_fpr95'] - r['f32_fpr95']), sets[key]['label'],
-            r['name'], r['group_A'], r['delta95'], r['f32_fpr95'],
-            r['exact_fpr95'])
+            r['name'], r['group_A'], r['delta95'], r['gmsp_fpr95'],
+            r['f32_fpr95'], r['exact_fpr95'])
            for key, rows in tables.items() for r in rows]
     rows.sort(key=lambda t: -t[0])
     return [t[1:] for t in rows[:top]]
@@ -697,20 +713,25 @@ def write_summary(path, sets, tables, flats, checks, robust_rows, rho,
     tie_counts = float32_tie_counts(tables)
     lines += ['', '## Float32 ties in the implemented Group MSP', '']
     lines += md_table(
-        ['set', f'FPR@95 gap > {CHECK_TOL["fpr95"]:g}',
-         f'AUROC gap > {CHECK_TOL["auroc"]:g}', 'splits'],
-        [(sets[k]['label'], n_fpr, n_auroc, n)
-         for k, (n_fpr, n_auroc, n) in tie_counts.items()])
-    lines += ['', 'Largest FPR@95 gaps (f32 vs exact), over every set:', '']
+        ['set', f'ill-conditioned (delta95 < {WELL_CONDITIONED:g})',
+         'splits'],
+        [(sets[k]['label'], n_ill, n)
+         for k, (n_ill, n) in tie_counts.items()])
+    lines += ['', 'Largest FPR@95 gaps (f32 vs exact) among the '
+             'ill-conditioned splits, over every set:', '']
     lines += md_table(
-        ['set', 'split', 'classes', 'delta95', 'f32 FPR@95', 'exact FPR@95'],
-        [(lbl, name, classes, f'{d95:.2g}', fmt(f32v), fmt(exactv))
-         for lbl, name, classes, d95, f32v, exactv
+        ['set', 'split', 'classes', 'delta95', 'sweep FPR@95', 'f32 FPR@95',
+         'exact FPR@95'],
+        [(lbl, name, classes, f'{d95:.2g}', fmt(sweepv), fmt(f32v),
+          fmt(exactv))
+         for lbl, name, classes, d95, sweepv, f32v, exactv
          in worst_float32_ties(tables, sets)])
-    lines += ['', 'The implemented Group MSP score is the float32 '
-             '-max(P_A, P_B): it cannot rank two points apart once their '
-             'divided mass m is below about 2^-24 ~ 6e-8, since both round '
-             'to the same float32 max and tie.']
+    lines += ['', 'For these splits, 95% of the OOD points are divided '
+             f'only below m ~ {WELL_CONDITIONED:g}. The implemented '
+             'float32 score cannot rank points there reliably, so its '
+             "FPR@95, like the sweep's, depends on float32 rounding. The "
+             'exact column is the float32-free value, and these splits '
+             'are left out of the Group MSP check.']
     lines += ['', f'## Flat MSP reference (delta = {key})', '']
     lines += md_table(['set', 'OOD uncertain %', 'ID uncertain %',
                        'precision %', 'u95', 'ID uncertain % at u95',
