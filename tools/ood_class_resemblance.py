@@ -16,10 +16,12 @@ classes, against the split's own ID points:
   = no preference); r_ID(c): the same around the ID points of the other
   classes, population-weighted; contrast = r_OOD / r_ID;
 - per split A | B (the splits of tools/divided_mass.py, A the smaller
-  side): R_A = the sum of r_OOD over A, E_A = R_A / (|A| / 24), and the OOD
-  / ID feature-divided shares -- a point is feature-divided when its k
-  neighbours include classes of both sides, the feature-space twin of the
-  divided mass;
+  side): among the measured classes M (those with a finite r_OOD), R_A =
+  the sum of r_OOD over A intersect M, E_A = R_A / (100 x |A intersect M|
+  / |M|) -- the enrichment over no preference among M, not over all 24 --
+  and the OOD / ID feature-divided shares, a point is feature-divided when
+  its k neighbours include classes of both sides, the feature-space twin
+  of the divided mass; all four are NaN when A holds no measured class;
 - Spearman rho of these against the divided mass and the improvement of
   the same splits: for the hypothesis that the best split puts the classes
   the OOD points resemble together on one side (improvement ~ R_A, E_A)
@@ -219,17 +221,34 @@ def class_profile(ood_counts, ood_weight, id_counts, id_label, id_weight, k,
 
 def split_measures(a_mask, r_ood, ood_counts, ood_weight, id_counts,
                    id_weight, k, chunk=65536):
-    """Per split: R_A (%), E_A and the OOD / ID feature-divided shares (%)."""
+    """Per split: R_A (%), E_A and the OOD / ID feature-divided shares (%),
+    all over the measured classes M -- those with a finite r_ood (NaN'd by
+    class_profile at exactly the classes the reference excluded from the
+    bank). R_A is the sum of r_ood over A intersect M. E_A = R_A / (100 *
+    |A intersect M| / |M|): the enrichment over no preference among M, not
+    over all 24, so excluding some other class from the bank does not
+    silently shift what 'no enrichment' means for a split that holds none
+    of the excluded classes. When A intersect M is empty (A holds no
+    measured class), R_A, E_A and both feature-divided shares are NaN --
+    unlike counting the missing classes as 0, which used to make a split
+    confined to unmeasured classes register as maximally 'together'. With
+    every class measured (M = all 24), every value is the pre-Ruling-22
+    formula, R_A / E_A over A itself."""
+    measured = ~np.isnan(r_ood)
     M = a_mask.astype(np.float64)
-    R_A = M @ np.nan_to_num(r_ood)
-    E_A = R_A / (100.0 * a_mask.sum(axis=1) / NUM_CLASSES)
+    n_am = (a_mask & measured).sum(axis=1)  # |A intersect M| per split
+    n_m = measured.sum()  # |M|; select_reference guarantees at least 1
+    have = n_am > 0
+    R_A = np.where(have, M @ np.nan_to_num(r_ood), np.nan)
+    with np.errstate(invalid='ignore', divide='ignore'):
+        E_A = np.where(have, R_A / (100.0 * n_am / n_m), np.nan)
 
     def divided(counts, weight):
         total = np.zeros(len(M))
         for i0 in range(0, len(counts), chunk):
             n_a = counts[i0:i0 + chunk].astype(np.float64) @ M.T
             total += weight[i0:i0 + chunk] @ ((n_a > 0) & (n_a < k))
-        return 100.0 * total / weight.sum()
+        return np.where(have, 100.0 * total / weight.sum(), np.nan)
 
     return R_A, E_A, divided(ood_counts, ood_weight), divided(id_counts,
                                                                id_weight)
@@ -242,12 +261,19 @@ def split_rows(names, subsets, divided, measures, threshold):
     rows = []
     for s, (name, subset) in enumerate(zip(names, subsets)):
         d = divided[name]
+        # NaN when split_measures found no measured class in A (checked
+        # explicitly: max(nan, 1e-3) is nan in CPython today, but that is
+        # an implementation quirk of max(), not a documented guarantee).
+        if math.isnan(fd_ood[s]) or math.isnan(fd_id[s]):
+            log_ratio = float('nan')
+        else:
+            log_ratio = math.log10(max(fd_ood[s], 1e-3)
+                                   / max(fd_id[s], 1e-3))
         rows.append(OrderedDict([
             ('name', name), ('size_A', len(subset)), ('group_A', d['group_A']),
             ('R_A', R_A[s]), ('E_A', E_A[s]),
             ('feat_div_ood', fd_ood[s]), ('feat_div_id', fd_id[s]),
-            ('feat_log_ratio', math.log10(max(fd_ood[s], 1e-3)
-                                          / max(fd_id[s], 1e-3))),
+            ('feat_log_ratio', log_ratio),
             ('ood_div', d[f'ood_div@{key}']), ('id_div', d[f'id_div@{key}']),
             ('improvement', d['improvement']), ('robust', d['robust'])]))
     return rows
@@ -303,7 +329,9 @@ def placement_rows(profile, splits, set_key, space, ks=(2, 3)):
     S_k in A), 'large side' (none of S_k in A) or 'apart' (the boundary
     separates them) -- and the improvement of each group. One row per (k,
     position), small side first, then large side, then apart; NaN
-    median/positive and '' best when a position holds no split."""
+    median/positive and '' best when a position holds no split. When fewer
+    than k classes have a finite r_ood, S_k holds only those (shorter than
+    k, never padded or an error)."""
     name_to_id = {name: c for c, name in enumerate(sb.CLASSES)}
     ranked = sorted(((r['r_ood'], name_to_id[r['class']]) for r in profile
                     if not np.isnan(r['r_ood'])), key=lambda t: (-t[0], t[1]))
@@ -343,19 +371,34 @@ def placement_rows(profile, splits, set_key, space, ks=(2, 3)):
     return rows
 
 
+def _measured_heading(rho, key, space):
+    """'Spearman rho over the N measured classes:' for the class-level
+    table of (key, space); N is ranged ('N-M measured classes') if the
+    table's rows do not all agree on n."""
+    class_n = [r['n'] for r in rho if r['set'] == key and r['space'] == space
+              and r['population'] == 'classes']
+    n_lo, n_hi = min(class_n), max(class_n)
+    if n_lo == n_hi:
+        return f'Spearman rho over the {n_lo} measured classes:'
+    return f'Spearman rho over the {n_lo}-{n_hi} measured classes:'
+
+
 def write_summary(path, sets, references, profiles, split_tables, rho, k,
                   reference=None, placement=None):
+    # sets, not the module-level SETS: a caller that evaluates a subset of
+    # SETS must still get the label it actually passed in.
     ref_line = ("reference: each set's own ID samples" if reference is None
                else 'reference: the ID samples of '
-               f"{SETS[reference]['label']} (all sets)")
+               f"{sets[reference]['label']} (all sets)")
     lines = [
         '# OOD resemblance to the ID classes, in the feature space', '',
-        f'kNN, k = {k}, cosine similarity, against a class-balanced bank of '
-        "the set's own ID samples. r_OOD(c): share of class c among the "
-        "OOD points' neighbours (100/24 = 4.17 % = no preference). r_ID(c): "
-        'the same around the ID points of the other classes. contrast = '
-        'r_OOD / r_ID. Feature-divided: the k neighbours hold classes of '
-        'both sides of a split.', '', ref_line, '', '## Reference banks', '']
+        f'kNN, k = {k}, cosine similarity, against a class-balanced bank '
+        "(see 'reference' below for its origin). r_OOD(c): share of class "
+        "c among the OOD points' neighbours (100/24 = 4.17 % = no "
+        'preference). r_ID(c): the same around the ID points of the other '
+        'classes. contrast = r_OOD / r_ID. Feature-divided: the k '
+        'neighbours hold classes of both sides of a split.', '', ref_line,
+        '', '## Reference banks', '']
     bank_cols = ([(reference, next(iter(references.values())))]
                 if reference is not None else list(references.items()))
     rows = []
@@ -423,16 +466,7 @@ def write_summary(path, sets, references, profiles, split_tables, rho, k,
                  and r['space'] == space and r['population'] == 'classes'}
         ys = ('ood_div', 'id_div', 'improvement')
         xs = ('r_ood', 'r_id', 'contrast', 'feat_div_ood', 'feat_div_id')
-        # 'measured' = has a finite r_ood (present in the bank);
-        # feat_div_ood/id are NaN'd at the same classes (profile_rows), so
-        # every row of this table agrees on n -- ranged only if they do not.
-        class_n = [r['n'] for r in rho if r['set'] == key
-                  and r['space'] == space and r['population'] == 'classes']
-        n_lo, n_hi = min(class_n), max(class_n)
-        heading = (f'Spearman rho over the {n_lo} measured classes:'
-                  if n_lo == n_hi else 'Spearman rho over the '
-                  f'{n_lo}-{n_hi} measured classes:')
-        lines += ['', heading, '']
+        lines += ['', _measured_heading(rho, key, space), '']
         lines += dm.md_table(['x'] + list(ys),
                              [[x] + [dm.fmt(table[(x, y)]) for y in ys]
                               for x in xs])
@@ -454,6 +488,22 @@ def write_summary(path, sets, references, profiles, split_tables, rho, k,
         fh.write('\n'.join(lines) + '\n')
 
 
+def _reference_bundle(label, ood, weight, bank_per_class, query_per_class,
+                      seed):
+    """select_reference, then the excluded mask, the ID-query population
+    weights and query_weights, for one set of samples -- the sequence
+    run() needs both for a set's own reference and for a shared one.
+    Returns (bank, query, ref_table, excluded, q_weight)."""
+    bank, query, ref_table = select_reference(
+        label, ood, weight, bank_per_class, query_per_class,
+        np.random.default_rng(seed))
+    excluded = np.array([r['excluded'] == 1 for r in ref_table])
+    population = np.bincount(label[~ood], weights=weight[~ood],
+                             minlength=NUM_CLASSES)[:NUM_CLASSES]
+    q_weight = query_weights(label[query], population)
+    return bank, query, ref_table, excluded, q_weight
+
+
 # --------------------------------------------------------------------- main
 def run(sets, divided_dir, out_dir, k=10, bank_per_class=4000,
         query_per_class=2000, threshold=dm.HEADLINE, device='cuda:0', seed=0,
@@ -473,15 +523,9 @@ def run(sets, divided_dir, out_dir, k=10, bank_per_class=4000,
     shared = None
     if reference is not None:
         ref_samples = load_samples(sets[reference]['features'])
-        r_label, r_ood = ref_samples['label'], ref_samples['ood']
-        r_weight = ref_samples['weight']
-        bank, query, ref_table = select_reference(
-            r_label, r_ood, r_weight, bank_per_class, query_per_class,
-            np.random.default_rng(seed))
-        excluded = np.array([r['excluded'] == 1 for r in ref_table])
-        population = np.bincount(r_label[~r_ood], weights=r_weight[~r_ood],
-                                 minlength=NUM_CLASSES)[:NUM_CLASSES]
-        q_weight = query_weights(r_label[query], population)
+        bank, query, ref_table, excluded, q_weight = _reference_bundle(
+            ref_samples['label'], ref_samples['ood'], ref_samples['weight'],
+            bank_per_class, query_per_class, seed)
         shared = dict(samples=ref_samples, bank=bank, query=query,
                       ref_table=ref_table, excluded=excluded,
                       q_weight=q_weight)
@@ -497,13 +541,8 @@ def run(sets, divided_dir, out_dir, k=10, bank_per_class=4000,
         label, ood, weight = samples['label'], samples['ood'], samples['weight']
         ood_index = np.flatnonzero(ood)
         if shared is None:
-            bank, query, ref_table = select_reference(
-                label, ood, weight, bank_per_class, query_per_class,
-                np.random.default_rng(seed))
-            excluded = np.array([r['excluded'] == 1 for r in ref_table])
-            population = np.bincount(label[~ood], weights=weight[~ood],
-                                     minlength=NUM_CLASSES)[:NUM_CLASSES]
-            q_weight = query_weights(label[query], population)
+            bank, query, ref_table, excluded, q_weight = _reference_bundle(
+                label, ood, weight, bank_per_class, query_per_class, seed)
             bank_samples = samples
         else:
             bank, query, ref_table = (shared['bank'], shared['query'],
@@ -526,6 +565,10 @@ def run(sets, divided_dir, out_dir, k=10, bank_per_class=4000,
                                       weight[ood_index], id_counts, q_weight,
                                       k)
             splits = split_rows(names, subsets, divided, measures, threshold)
+            # profile_rows's own 'reference' parameter is this ref_table
+            # (the per-class bank table), not this function's reference=
+            # (the set name) -- the two public names only collide in
+            # English, never in scope.
             prof = profile_rows(profile, ref_table, splits)
             dm.write_tsv(osp.join(out_dir, f'profile_{key}_{space}.tsv'), prof)
             dm.write_tsv(osp.join(out_dir, f'splits_{key}_{space}.tsv'), splits)

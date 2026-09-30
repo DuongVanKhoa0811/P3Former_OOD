@@ -105,19 +105,65 @@ def test_split_measures_nan_r_ood():
     baseline = res.split_measures(mask, r_ood, counts, weight, counts, weight,
                                   k)
     nan_r_ood = r_ood.copy()
-    nan_r_ood[7] = float('nan')  # class 7 excluded from the bank
+    nan_r_ood[7] = float('nan')  # class 7 excluded from the bank: |M| = 23
     R_A, E_A, fd_ood, fd_id = res.split_measures(
         mask, nan_r_ood, counts, weight, counts, weight, k)
-    assert np.all(np.isfinite(R_A)) and np.all(np.isfinite(E_A))
+
+    # (7,): A is entirely the excluded class -- NaN everywhere (Ruling 22),
+    # not the old "NaN counted as 0" value.
+    assert np.isnan(R_A[0]) and np.isnan(E_A[0])
+    assert np.isnan(fd_ood[0]) and np.isnan(fd_id[0])
+
+    # the other two subsets have a nonempty A intersect M: R_A sums r_ood
+    # over their measured members, and E_A's denominator is over |M| = 23,
+    # not 24 -- even for (0, 1, 2, 3, 4), a "clean" A with no excluded
+    # member of its own, because the 'no preference' baseline is over the
+    # measured classes, not the nominal 24.
     want = r_ood.copy()
-    want[7] = 0.0  # the code counts a NaN r_ood as 0, not as missing
-    for s, subset in enumerate(subsets):
+    want[7] = 0.0
+    n_m = 23
+    for s, subset in ((1, (0, 1, 2, 3, 4)), (2, tuple(range(12)))):
+        n_am = sum(1 for c in subset if c != 7)
         assert np.isclose(R_A[s], want[list(subset)].sum())
-        assert np.isclose(E_A[s], R_A[s] / (100.0 * len(subset) / C))
-    # the feature-divided shares are computed from counts/weight alone and
-    # must not change when r_ood does.
-    assert np.allclose(fd_ood, baseline[2]) and np.allclose(fd_id, baseline[3])
+        assert np.isclose(E_A[s], R_A[s] / (100.0 * n_am / n_m))
+        # the feature-divided shares of a mixed split are computed from
+        # counts/weight alone and must not depend on r_ood.
+        assert np.isclose(fd_ood[s], baseline[2][s])
+        assert np.isclose(fd_id[s], baseline[3][s])
     print('test_split_measures_nan_r_ood passed')
+
+
+def test_split_measures_full_bank_matches_old_formula():
+    """With every class measured (M = all 24), split_measures reduces
+    exactly to the pre-Ruling-22 formula: E_A = R_A / (100 * |A| / 24)."""
+    rng = np.random.RandomState(9)
+    k = 10
+    counts = rng.multinomial(k, np.ones(C) / C, size=150).astype(np.int32)
+    weight = rng.uniform(0.5, 2.0, 150)
+    subsets = [(7, ), (0, 1, 2, 3, 4), tuple(range(12))]
+    mask = sb.subsets_to_mask(subsets)
+    r_ood = 100.0 * rng.dirichlet(np.ones(C))  # every class finite
+    R_A, E_A, fd_ood, fd_id = res.split_measures(
+        mask, r_ood, counts, weight, counts, weight, k)
+    for s, subset in enumerate(subsets):
+        assert np.isfinite(R_A[s]) and np.isfinite(E_A[s])
+        assert np.isclose(R_A[s], r_ood[list(subset)].sum())
+        assert np.isclose(E_A[s], R_A[s] / (100.0 * len(subset) / C))
+    print('test_split_measures_full_bank_matches_old_formula passed')
+
+
+def test_split_rows_nan_feat_log_ratio():
+    """feat_log_ratio is NaN -- not a value that happens to fall out of
+    max(nan, 1e-3) -- when split_measures found no measured class in A."""
+    names, subsets = ['s7'], [(7, )]
+    divided = {'s7': OrderedDict([
+        ('group_A', 'x'), ('ood_div@0.05', 1.0), ('id_div@0.05', 0.5),
+        ('improvement', 3.0), ('robust', 0)])}
+    nan = np.array([float('nan')])
+    measures = (nan, nan, nan, nan)  # R_A, E_A, feat_div_ood, feat_div_id
+    rows = res.split_rows(names, subsets, divided, measures, 0.05)
+    assert np.isnan(rows[0]['feat_log_ratio'])
+    print('test_split_rows_nan_feat_log_ratio passed')
 
 
 def test_placement_rows():
@@ -184,6 +230,42 @@ def test_placement_rows():
     assert apart3['best'] == sb.partition_name((2, 3, 5))
     assert np.isclose(apart3['best_improvement'], 25.0)
     print('test_placement_rows passed')
+
+
+def test_placement_rows_ties_and_short_sk():
+    # a tie in r_ood: the class-id tie-break keeps the smaller ids.
+    tied = {2: 10.0, 5: 10.0, 8: 10.0}
+    profile = [OrderedDict([('class', sb.CLASSES[c]),
+                            ('r_ood', tied.get(c, float('nan')))])
+              for c in range(C)]
+    splits = [OrderedDict([('name', sb.partition_name((2, 5))),
+                           ('improvement', 1.0)])]
+    rows = res.placement_rows(profile, splits, 'test', 'full', ks=(2, ))
+    small = next(r for r in rows if r['position'] == 'small side')
+    assert small['classes'] == f'{sb.CLASSES[2]}, {sb.CLASSES[5]}'  # not 8
+
+    # fewer than k classes are measured: S_k holds only what is finite,
+    # neither padded nor an error (placement_rows's own docstring).
+    profile2 = [OrderedDict([('class', sb.CLASSES[c]),
+                             ('r_ood', 5.0 if c == 9 else float('nan'))])
+               for c in range(C)]
+    rows2 = res.placement_rows(profile2, splits, 'test', 'full', ks=(3, ))
+    assert rows2[0]['classes'] == sb.CLASSES[9]
+    print('test_placement_rows_ties_and_short_sk passed')
+
+
+def test_measured_heading_ranges():
+    def row(x, n):
+        return OrderedDict([
+            ('set', 'cetran'), ('space', 'full'), ('population', 'classes'),
+            ('x', x), ('y', 'improvement'), ('rho', 0.1), ('n', n)])
+    mixed = [row('r_ood', 23), row('r_id', 23), row('contrast', 15)]
+    assert (res._measured_heading(mixed, 'cetran', 'full')
+           == 'Spearman rho over the 15-23 measured classes:')
+    uniform = [row('r_ood', 24), row('feat_div_ood', 24)]
+    assert (res._measured_heading(uniform, 'cetran', 'full')
+           == 'Spearman rho over the 24 measured classes:')
+    print('test_measured_heading_ranges passed')
 
 
 def test_reference_selection():
@@ -373,6 +455,9 @@ def test_cross_set_reference():
         assert "reference: each set's own ID samples" in default_summary
         assert ('reference: the ID samples of Test + Cetran (all sets)'
                in xref_summary)
+        # the fixed intro sentence must not claim "the set's own" in a
+        # cross-set run, contradicting the reference line right after it.
+        assert "the set's own" not in xref_summary
         # Cetran lacks class 16 only: 23 measured by default, 24 with the
         # cross-set reference (Test + Cetran has every class).
         assert 'Spearman rho over the 23 measured classes:' in default_summary
@@ -385,7 +470,11 @@ if __name__ == '__main__':
     test_profile_weights_and_exclusion()
     test_split_measures_match_brute_force()
     test_split_measures_nan_r_ood()
+    test_split_measures_full_bank_matches_old_formula()
+    test_split_rows_nan_feat_log_ratio()
     test_placement_rows()
+    test_placement_rows_ties_and_short_sk()
+    test_measured_heading_ranges()
     test_reference_selection()
     test_run_end_to_end()
     test_cross_set_reference()
