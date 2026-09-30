@@ -146,9 +146,12 @@ def tsne_figure(panels, stem):
     handles, names = [], []
     for _, ids in GROUPS.values():
         for c in ids:
+            # C2: match the ID scatter's own alpha (0.75); the OOD handles
+            # below already match theirs (0.7).
             handles.append(Line2D([], [], ls='none', marker='o',
                                   markersize=3.5,
-                                  color=CLASS_COLOURS[sb.CLASSES[c]]))
+                                  color=CLASS_COLOURS[sb.CLASSES[c]],
+                                  alpha=0.75))
             names.append(sb.CLASSES[c])
     for marker, name in OOD_MARKERS.values():
         handles.append(Line2D([], [], ls='none', marker=marker,

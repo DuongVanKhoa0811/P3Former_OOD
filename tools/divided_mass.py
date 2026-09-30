@@ -32,7 +32,7 @@ rank by, -max(P_A, P_B) / -max_c p_c in float32 (F2): a float32 just below
 about that collapse onto the same score and tie, which the exact
 histogram alone would still rank apart. f32_* metrics (from m32 / u32) are
 what is checked against the sweep logs; exact_* metrics (from m / u) are
-the tool's own reference. Below delta95 = WELL_CONDITIONED (1e-5), 95% of
+the tool's own reference. Below delta95 = WELL_CONDITIONED (1e-05), 95% of
 a split's OOD points divide only within a few float32 ulps of saturation,
 so neither the tool's f32 metric nor the sweep's own FPR@95 is stable
 enough to check: the Group MSP check covers only splits at or above it,
@@ -516,6 +516,11 @@ def default_subsets(sets):
     must be the same on every set."""
     lists = []
     for spec in sets.values():
+        if not osp.exists(spec['partitions']):
+            raise FileNotFoundError(
+                f"{spec['partitions']} is missing: run "
+                'tools/sweep_bipartitions.py (the random sweep of this set) '
+                'first')
         with open(spec['partitions']) as fh:
             lists.append([sb.canonical(item['A']) for item in json.load(fh)])
     if any(other != lists[0] for other in lists[1:]):
@@ -566,6 +571,12 @@ def flat_row(label, hist, edges_u, rows, deltas=DELTAS):
     return row
 
 
+def _n_splits(n):
+    """'1 split' / 'N splits' (N2: the plain f'{n} splits' this replaces
+    reads as '1 splits' when n == 1)."""
+    return f'{n} split' if n == 1 else f'{n} splits'
+
+
 def consistency_checks(label, table, flat, agreement):
     """The summary's check rows: worst |difference| against its tolerance,
     PASS or FAIL. Compares the f32-histogram metrics -- which reproduce the
@@ -582,12 +593,12 @@ def consistency_checks(label, table, flat, agreement):
         worst = max((abs(r[f'f32_{metric}'] - r[f'gmsp_{metric}'])
                     for r in well), default=0.0)
         checks.append((f'Group MSP {metric}, histograms vs sweep '
-                       f'({len(well)} splits, delta95 >= {WELL_CONDITIONED:g})',
-                       worst, tol))
+                       f'({_n_splits(len(well))}, '
+                       f'delta95 >= {WELL_CONDITIONED:g})', worst, tol))
         worst = abs(flat[f'f32_{metric}'] - flat[f'msp_{metric}'])
         checks.append((f'flat MSP {metric}, histograms vs sweep', worst, tol))
     n_common, worst = agreement
-    checks.append((f'{n_common} splits in both sweep logs', worst,
+    checks.append((f'{_n_splits(n_common)} in both sweep logs', worst,
                    SINGLETON_TOL))
     return [OrderedDict([('set', label), ('check', check), ('worst', worst),
                          ('tolerance', tol),
@@ -634,9 +645,14 @@ def write_tsv(path, rows, header=None):
                              else row[k] for k in header])
 
 
-def read_tsv(path):
+def read_tsv(path, producer=None):
     """Rows of a :func:`write_tsv` table; numbers are parsed back (ints stay
-    ints; 'inf' / 'nan' become floats)."""
+    ints; 'inf' / 'nan' become floats). ``producer``, when given, names the
+    tool that should have written ``path`` (e.g. 'tools/divided_mass.py'):
+    a missing file then raises a message pointing at it, instead of a bare
+    FileNotFoundError from deep inside ``open()``."""
+    if producer is not None and not osp.exists(path):
+        raise FileNotFoundError(f'{path} is missing: run {producer} first')
     with open(path, newline='') as fh:
         return [OrderedDict((k, _parse(v)) for k, v in row.items())
                 for row in csv.DictReader(fh, delimiter='\t')]
@@ -703,6 +719,11 @@ def worst_float32_ties(tables, sets, top=10):
 
 def write_summary(path, sets, tables, flats, checks, robust_rows, rho,
                   headline=HEADLINE):
+    """Write ``summary.md``, in order: consistency checks; the float32-tie
+    counts per set, and, only when some split is ill-conditioned, its
+    worst FPR@95 gaps; the flat-MSP reference; one single-class-splits
+    table per set; the robust splits; Spearman rho per set and
+    population."""
     key = delta_key(headline)
     lines = ['# Divided mass of two-group splits', '',
              'Divided at delta: m = min(P_A, P_B) >= delta. Flat uncertain: '
@@ -731,15 +752,18 @@ def write_summary(path, sets, tables, flats, checks, robust_rows, rho,
             [(lbl, name, classes, f'{d95:.2g}', fmt(sweepv), fmt(f32v),
               fmt(exactv))
              for lbl, name, classes, d95, sweepv, f32v, exactv in worst])
+        # C1: this paragraph explains the ill-conditioned splits the table
+        # above just listed, so it belongs with them, not printed
+        # unconditionally even when there are none to explain.
+        lines += ['', 'For these splits, 95% of the OOD points are divided '
+                 f'only below m ~ {WELL_CONDITIONED:g}. The implemented '
+                 'float32 score cannot rank points there reliably, so its '
+                 "FPR@95, like the sweep's, depends on float32 rounding. "
+                 'The exact column is the float32-free value, and these '
+                 'splits are left out of the Group MSP check.']
     else:
         lines += ['', 'No split is ill-conditioned (delta95 < '
                  f'{WELL_CONDITIONED:g}) on any set.']
-    lines += ['', 'For these splits, 95% of the OOD points are divided '
-             f'only below m ~ {WELL_CONDITIONED:g}. The implemented '
-             'float32 score cannot rank points there reliably, so its '
-             "FPR@95, like the sweep's, depends on float32 rounding. The "
-             'exact column is the float32-free value, and these splits '
-             'are left out of the Group MSP check.']
     lines += ['', f'## Flat MSP reference (delta = {key})', '']
     lines += md_table(['set', 'OOD uncertain %', 'ID uncertain %',
                        'precision %', 'u95', 'ID uncertain % at u95',

@@ -283,6 +283,61 @@ def test_reference_selection():
     print('test_reference_selection passed')
 
 
+def test_profile_rows_names_missing_splits():
+    """S4: profile_rows' singleton lookup used to be a bare dict index
+    (KeyError: 's0', no context); it must now name the missing split(s)
+    and the fix, mirroring divided_mass.split_metrics."""
+    r_ood, r_id, contrast = np.zeros(C), np.zeros(C), np.zeros(C)
+    reference = [OrderedDict([('excluded', 0), ('bank', 1), ('queries', 1)])
+                for _ in range(C)]
+    # every singleton split except class 0's and class 1's.
+    splits = [OrderedDict([('name', sb.partition_name((c, ))),
+                           ('feat_div_ood', 0.0), ('feat_div_id', 0.0),
+                           ('ood_div', 0.0), ('id_div', 0.0),
+                           ('improvement', 0.0)])
+             for c in range(2, C)]
+    try:
+        res.profile_rows((r_ood, r_id, contrast), reference, splits)
+    except KeyError as err:
+        assert sb.partition_name((0, )) in str(err), err
+        assert sb.partition_name((1, )) in str(err), err
+        assert 'tools/sweep_bipartitions.py --subsets singletons' in str(err)
+        assert 'tools/divided_mass.py' in str(err)
+    else:
+        raise AssertionError('missing singleton splits accepted')
+    print('test_profile_rows_names_missing_splits passed')
+
+
+def test_missing_inputs_are_explained():
+    """S3: the upstream-output error pattern applied to this module's own
+    read sites."""
+    with tempfile.TemporaryDirectory() as tmp:
+        # load_samples: an empty feature directory names
+        # tools/extract_point_features.py, not a bare error (this is
+        # already the tool's existing behaviour -- pinned here).
+        empty = os.path.join(tmp, 'features_cetran')
+        os.makedirs(empty)
+        try:
+            res.load_samples([empty])
+        except FileNotFoundError as err:
+            assert 'tools/extract_point_features.py' in str(err)
+        else:
+            raise AssertionError('empty feature directory accepted')
+
+        # run: a divided_dir with none of tools/divided_mass.py's output
+        # names it, not a bare error from read_tsv's open() (S3). This is
+        # reached before load_samples, so the feature directories need not
+        # exist.
+        sets = res.resolve_sets(os.path.join(tmp, 'root'))
+        try:
+            res.run(sets, tmp, os.path.join(tmp, 'out'), device='cpu')
+        except FileNotFoundError as err:
+            assert 'run tools/divided_mass.py' in str(err), err
+        else:
+            raise AssertionError('missing divided-mass tables accepted')
+    print('test_missing_inputs_are_explained passed')
+
+
 def _write_features(d, frames, rng, centres, dim=8, missing=None, noise=0.3):
     """Feature samples as tools/extract_point_features.py writes them; the
     OOD points sit next to class 16 (overhead-bridge). ``missing`` drops
@@ -416,6 +471,18 @@ def test_cross_set_reference():
                 os.path.join(out_dir, f'profile_{key}_{space}.tsv'))}
 
         default_profile = profile_of(out_default)
+        # fixture precondition (S8): the noise must give every measured
+        # class some cross-class neighbours, so contrast = dm.ratio(r_ood,
+        # r_id) is defined -- 0/0 is NaN, not a measurement of anything --
+        # for every one of them. A future breakage here names the fixture,
+        # not the reference-selection logic the assertions below exercise.
+        measured = [r for r in default_profile.values()
+                   if not np.isnan(r['r_ood'])]
+        assert measured, 'fixture precondition: no class was measured'
+        assert all(r['r_ood'] != 0.0 or r['r_id'] != 0.0 for r in measured), (
+            'fixture precondition: the noise must give every measured '
+            'class some cross-class neighbours (r_ood or r_id nonzero), '
+            'so contrast is defined')
         assert np.isnan(default_profile['overhead-bridge']['r_ood'])
         # a class left out of the bank has no measured feature-divided
         # share either (its singleton's 0.0 is structural, not measured).
@@ -476,6 +543,8 @@ if __name__ == '__main__':
     test_placement_rows_ties_and_short_sk()
     test_measured_heading_ranges()
     test_reference_selection()
+    test_profile_rows_names_missing_splits()
+    test_missing_inputs_are_explained()
     test_run_end_to_end()
     test_cross_set_reference()
     print('ALL TESTS PASSED')

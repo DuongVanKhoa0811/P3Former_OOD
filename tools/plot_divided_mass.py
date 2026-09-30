@@ -345,7 +345,8 @@ def bubble_panel(ax, points, xlim, ylim, star=None, background=None):
         xs = np.array(xlim)
         ax.plot(xs, xs * (y0 / x0), ls=(0, (4, 3)), lw=0.7, color='0.35',
                 zorder=2)
-        ax.scatter([x0], [y0], marker='*', s=70, color='black', zorder=20)
+        ax.scatter([x0], [y0], marker='*', s=_STAR_SIZE, color='black',
+                  zorder=20)
     items = []
     for z, pt in enumerate(sorted(points, key=lambda p: -abs(p['value']))):
         colour, text_colour = ((GAIN, GAIN_TXT) if pt['value'] > 0
@@ -519,11 +520,16 @@ def bubble_grid(panels, xlabel, ylabel, stem, stars=None, backgrounds=None,
 
 # ---------------------------------------------------------------- figures
 def load(divided_dir):
-    tables = OrderedDict((key, dm.read_tsv(osp.join(divided_dir, f'{key}.tsv')))
-                         for key in dm.SETS)
+    """The tables of tools/divided_mass.py: (tables: set -> rows, labels:
+    set -> title, flat rows, rho rows)."""
+    producer = 'tools/divided_mass.py'
+    tables = OrderedDict(
+        (key, dm.read_tsv(osp.join(divided_dir, f'{key}.tsv'),
+                          producer=producer))
+        for key in dm.SETS)
     labels = OrderedDict((key, spec['label']) for key, spec in dm.SETS.items())
-    flat = dm.read_tsv(osp.join(divided_dir, 'flat.tsv'))
-    rho = dm.read_tsv(osp.join(divided_dir, 'rho.tsv'))
+    flat = dm.read_tsv(osp.join(divided_dir, 'flat.tsv'), producer=producer)
+    rho = dm.read_tsv(osp.join(divided_dir, 'rho.tsv'), producer=producer)
     return tables, labels, flat, rho
 
 

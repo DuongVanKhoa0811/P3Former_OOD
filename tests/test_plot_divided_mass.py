@@ -73,6 +73,21 @@ def test_figures_are_written():
     print('test_figures_are_written passed')
 
 
+def test_missing_divided_dir_names_the_producer():
+    """S3: plot_divided_mass.py on a directory with no divided_mass.py
+    output must fail loudly and name the tool to run first. Checks for the
+    friendly message's own wording ('run tools/divided_mass.py'), not just
+    'tools/divided_mass.py' alone -- a bare traceback from deep inside
+    read_tsv's open() would also contain that substring, harmlessly, as
+    the absolute path of the frame that raised it."""
+    with tempfile.TemporaryDirectory() as tmp:
+        proc = subprocess.run([sys.executable, SCRIPT, tmp],
+                              capture_output=True, text=True, cwd=_REPO_ROOT)
+        assert proc.returncode != 0
+        assert 'run tools/divided_mass.py' in proc.stderr, proc.stderr
+    print('test_missing_divided_dir_names_the_producer passed')
+
+
 def test_labels_do_not_overlap_when_there_is_room():
     import matplotlib
     matplotlib.use('Agg')
@@ -459,6 +474,7 @@ def test_bubble_grid_draws_notes_only_in_their_own_panel():
 
 if __name__ == '__main__':
     test_figures_are_written()
+    test_missing_divided_dir_names_the_producer()
     test_labels_do_not_overlap_when_there_is_room()
     test_dense_singletons_fit_and_refine_does_not_worsen_overlap()
     test_labels_are_drawn_above_every_bubble()

@@ -78,12 +78,28 @@ def test_figures_are_written():
     print('test_figures_are_written passed')
 
 
+def test_missing_res_dir_names_the_producer():
+    """S3: plot_ood_class_resemblance.load on a directory with none of
+    tools/ood_class_resemblance.py's output must name that tool, not raise
+    a bare FileNotFoundError from deep inside read_tsv's open()."""
+    import plot_ood_class_resemblance as pcr
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            pcr.load(tmp, 'full')
+        except FileNotFoundError as err:
+            assert 'run tools/ood_class_resemblance.py' in str(err), err
+        else:
+            raise AssertionError('missing resemblance directory accepted')
+    print('test_missing_res_dir_names_the_producer passed')
+
+
 def test_label_x_clears_the_bar_and_the_marker():
     import matplotlib
     matplotlib.use('Agg')
     import plot_ood_class_resemblance as pcr
 
-    # no marker: the old behaviour, bar end + margin
+    # no marker, no r_ID bar (its default): the old behaviour, bar end +
+    # margin
     assert pcr.label_x(3.0, None, 0.5) == 3.5
     # marker beyond the bar: text clears the marker, not just the bar
     x = pcr.label_x(3.0, 7.0, 0.5)
@@ -91,6 +107,15 @@ def test_label_x_clears_the_bar_and_the_marker():
     # bar beyond the marker: text clears the bar, not just the marker
     x = pcr.label_x(7.0, 3.0, 0.5)
     assert x == 7.5 and x > 3.0 and x > 7.0
+    # C3: r_ID bar beyond the r_OOD bar and any marker: text clears the
+    # r_ID bar too, not just the r_OOD bar and the marker
+    x = pcr.label_x(3.0, None, 0.5, id_bar_end=7.0)
+    assert x == 7.5 and x > 3.0 and x > 7.0
+    x = pcr.label_x(3.0, 4.0, 0.5, id_bar_end=7.0)
+    assert x == 7.5 and x > 3.0 and x > 4.0 and x > 7.0
+    # r_ID bar within the other two: no effect, same as the default 0.0
+    x = pcr.label_x(7.0, None, 0.5, id_bar_end=3.0)
+    assert x == 7.5
     print('test_label_x_clears_the_bar_and_the_marker passed')
 
 
@@ -164,9 +189,83 @@ def test_profile_figure_labels_have_a_halo_and_x_is_unclipped():
     print('test_profile_figure_labels_have_a_halo_and_x_is_unclipped passed')
 
 
+def test_profile_figure_keeps_text_inside_its_panel():
+    """S1/S2 regression: text_max (the shared right x-limit's budget) used
+    to track only each label's *start* x -- via label_x -- never its own
+    rendered width, so nothing stopped a text from running past the axis
+    it is drawn in. A profile shaped like a real one (shares near xmax,
+    summing to ~100 %) turns out to leave enough headroom regardless
+    (checked directly against the unfixed code: see the task report), and
+    so does this test's small/uniform r_ood/r_id with several absent
+    classes alone -- an absent row's caption starts near x = 0, which
+    gets nearly the whole panel's width as headroom either way. The one
+    path that margin does not cover is an appearance-space marker
+    (label_x's other input): xmax is computed from r_ood/r_id alone, never
+    from the appearance profile, so a marker placed well past xmax can
+    push a value label's *start* close to the unfixed x_upper with almost
+    no room left for the label's own text. This fixture keeps every
+    ingredient of the brief's recipe (small uniform r_ood/r_id, three
+    absent classes, one long improvement value driving the longest
+    string, the 'not in the bank' caption) and adds that marker so the
+    combination actually clips on the unfixed code (confirmed: about
+    18 px of overflow before the fix, 0 after, at profile_figure's real
+    figsize and panel count -- see probe_s1.py in the task report)."""
+    import matplotlib
+    matplotlib.use('Agg')
+    import plot_divided_mass as pdm
+    import plot_ood_class_resemblance as pcr
+
+    labels = OrderedDict([('cetran', 'Cetran'), ('test', 'Test'),
+                          ('test_cetran', 'Test + Cetran')])
+    classes = ['car', 'bicycle', 'motorcycle', 'truck', 'bus', 'person',
+              'rider', 'traffic-sign']
+    rows = []
+    for i, c in enumerate(classes):
+        absent = i in (1, 4, 6)
+        rows.append({
+            'class': c,
+            'r_ood': float('nan') if absent else 4.0 + 0.1 * i,
+            'r_id': float('nan') if absent else 3.0 + 0.1 * i,
+            'improvement': -123.4 if i == 4 else float(2.0 * i - 5)})
+    profiles = OrderedDict((key, rows) for key in labels)
+    # xmax only looks at r_ood/r_id, so an appearance-space marker far
+    # past it (here, 'car' at 45 against a full-space xmax of ~4.7) is
+    # invisible to x_upper's own 30 % margin.
+    appearance = OrderedDict(
+        (key, [{'class': c, 'r_ood': 45.0 if c == 'car' else float('nan')}
+              for c in classes]) for key in labels)
+
+    captured = {}
+    real_save = pdm.save
+    pdm.save = lambda fig, stem: captured.setdefault('fig', fig)
+    try:
+        pcr.profile_figure(labels, profiles, appearance, 'unused-stem')
+    finally:
+        pdm.save = real_save
+
+    fig = captured['fig']
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    assert len(fig.axes) == 3, 'expected one panel per set'
+    checked = 0
+    for ax in fig.axes:
+        ax_box = ax.get_window_extent(renderer)
+        for t in ax.texts:
+            box = t.get_window_extent(renderer)
+            assert box.x0 >= ax_box.x0 - 1 and box.x1 <= ax_box.x1 + 1, (
+                f'{t.get_text()!r} sits outside its panel: text x '
+                f'[{box.x0:.1f}, {box.x1:.1f}], axis x '
+                f'[{ax_box.x0:.1f}, {ax_box.x1:.1f}]')
+            checked += 1
+    assert checked, 'fixture drew no text to check'
+    print('test_profile_figure_keeps_text_inside_its_panel passed')
+
+
 if __name__ == '__main__':
     test_figures_are_written()
+    test_missing_res_dir_names_the_producer()
     test_label_x_clears_the_bar_and_the_marker()
     test_feature_panels_skips_unmeasured_classes()
     test_profile_figure_labels_have_a_halo_and_x_is_unclipped()
+    test_profile_figure_keeps_text_inside_its_panel()
     print('ALL TESTS PASSED')

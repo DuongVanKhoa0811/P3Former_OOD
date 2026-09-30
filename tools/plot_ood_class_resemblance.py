@@ -66,7 +66,11 @@ VALUE_HALO = [withStroke(linewidth=2.5, foreground='white')]
 
 
 def load(res_dir, space):
-    read = lambda name: dm.read_tsv(osp.join(res_dir, name))  # noqa: E731
+    """The tables of tools/ood_class_resemblance.py for one ``space``:
+    (labels: set -> title, profiles, appearance profiles (full space
+    only, when written), splits, rho rows)."""
+    read = lambda name: dm.read_tsv(  # noqa: E731
+        osp.join(res_dir, name), producer='tools/ood_class_resemblance.py')
     labels = OrderedDict((k, s['label']) for k, s in res.SETS.items())
     profiles = OrderedDict((k, read(f'profile_{k}_{space}.tsv'))
                            for k in res.SETS)
@@ -80,14 +84,39 @@ def load(res_dir, space):
     return labels, profiles, appearance, splits, read('rho.tsv')
 
 
-def label_x(bar_end, marker_x, margin):
+def label_x(bar_end, marker_x, margin, id_bar_end=0.0):
     """x position for a row's text label (an improvement value, or the
-    'not in the bank' caption): to the right of both ``bar_end`` (the
-    row's full-space bar end, 0 for a class with no bar) and ``marker_x``
+    'not in the bank' caption): to the right of ``bar_end`` (the row's
+    full-space r_OOD bar end, 0 for a class with no bar), ``marker_x``
     (the appearance-space marker, or None when the panel has none for this
-    class), plus ``margin`` -- so the text never sits on the marker."""
-    base = bar_end if marker_x is None else max(bar_end, marker_x)
-    return base + margin
+    class) and ``id_bar_end`` (the row's r_ID bar end, 0 by default: C3 --
+    the label sits in the r_OOD bar's half-row but its own font height
+    bleeds into the r_ID bar's half below, so it must clear that bar too,
+    or its white halo cuts a notch into a long one), plus ``margin`` -- so
+    the text never sits on the marker or either bar."""
+    parts = [bar_end, id_bar_end]
+    if marker_x is not None:
+        parts.append(marker_x)
+    return max(parts) + margin
+
+
+def _text_right_x(ax, renderer, margin_pt=2.0):
+    """The data-x just past the right edge of every text ``ax`` has drawn
+    (``ax.texts``: the value labels and 'not in the bank' captions), with
+    ``margin_pt`` points of slack -- None when ``ax`` has no text yet.
+    ``label_x`` above only budgets a label's *start*; this reads back each
+    text's actual rendered window extent (pixels) and converts the widest
+    right edge through ``ax``'s current transform, so a caller can widen
+    xlim to clear it. Widening xlim only gives the same, fixed-pixel-width
+    text *more* data-space headroom (a wider view maps the same pixel
+    width to fewer data units), so applying this value never re-clips the
+    text it just measured."""
+    if not ax.texts:
+        return None
+    px = ax.figure.dpi / 72.0
+    right_px = max(t.get_window_extent(renderer).x1 for t in ax.texts)
+    return ax.transData.inverted().transform(
+        (right_px + margin_pt * px, 0.0))[0]
 
 
 def profile_figure(labels, profiles, appearance, stem):
@@ -124,7 +153,8 @@ def profile_figure(labels, profiles, appearance, stem):
             any_absent = any_absent or nan
             marker_x = None if nan else app.get(c)
             bar_end = 0.0 if nan else by[c]['r_ood']
-            tx = label_x(bar_end, marker_x, margin)
+            id_bar_end = 0.0 if nan else by[c]['r_id']
+            tx = label_x(bar_end, marker_x, margin, id_bar_end)
             text_max = max(text_max, tx)
             info.append(dict(c=c, nan=nan, r_ood=by[c]['r_ood'],
                              r_id=by[c]['r_id'], marker_x=marker_x,
@@ -173,6 +203,21 @@ def profile_figure(labels, profiles, appearance, stem):
         ax.set_xlabel('share of the neighbours (%)')
         ax.grid(axis='x', color='0.9', lw=0.4)
         ax.set_axisbelow(True)
+    # S1: text_max above budgets only each label's *start* x, never its own
+    # rendered width -- the longest is the 'not in the bank (+-x)' caption,
+    # but an appearance-space marker can also push a value label's start
+    # close to x_upper. Render once and read back every text actually
+    # drawn; if any overflows, push the shared right limit out and
+    # re-apply it to every panel (S2: test_profile_figure_keeps_text_
+    # inside_its_panel).
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    overflow = [x for x in (_text_right_x(ax, renderer) for ax in axes[0])
+               if x is not None]
+    if overflow and max(overflow) > x_upper:
+        x_upper = max(overflow)
+        for ax in axes[0]:
+            ax.set_xlim(0, x_upper)
     axes[0, 0].set_yticks(y)
     axes[0, 0].set_yticklabels(order, fontsize=6.5)
     handles = [

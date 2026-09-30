@@ -16,6 +16,16 @@ sys.path.insert(0, _REPO_ROOT)
 sys.path.insert(0, os.path.join(_REPO_ROOT, 'tools'))
 
 import extract_point_features as epf  # noqa: E402
+import sweep_bipartitions as sb  # noqa: E402
+
+
+def test_num_classes_matches_sweep_bipartitions():
+    # N1: this tool keeps its own standalone NUM_CLASSES (it must run
+    # before any sweep or dump exists, so it deliberately does not import
+    # sweep_bipartitions for it) -- this test is what would catch the two
+    # constants drifting apart if DSO's class count ever changes.
+    assert epf.NUM_CLASSES == sb.NUM_CLASSES
+    print('test_num_classes_matches_sweep_bipartitions passed')
 
 
 def test_sample_frame():
@@ -169,6 +179,7 @@ def test_out_dir_must_be_empty():
 
 
 if __name__ == '__main__':
+    test_num_classes_matches_sweep_bipartitions()
     test_sample_frame()
     test_capture_and_frame_record()
     test_dump_comparison()

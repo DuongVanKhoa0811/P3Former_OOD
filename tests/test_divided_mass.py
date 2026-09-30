@@ -343,6 +343,28 @@ def test_tsv_round_trip():
     print('test_tsv_round_trip passed')
 
 
+def test_read_tsv_names_the_producer_when_missing():
+    """S3: a missing upstream TSV should name the tool that writes it, not
+    raise a bare FileNotFoundError from deep inside open()."""
+    with tempfile.TemporaryDirectory() as tmp:
+        missing = os.path.join(tmp, 'no_such.tsv')
+        try:
+            dm.read_tsv(missing, producer='tools/some_tool.py')
+        except FileNotFoundError as err:
+            assert missing in str(err) and 'tools/some_tool.py' in str(err)
+            assert 'first' in str(err)
+        else:
+            raise AssertionError('missing file with a producer accepted')
+        # producer=None (the default): the original bare error, unchanged
+        try:
+            dm.read_tsv(missing)
+        except FileNotFoundError as err:
+            assert 'is missing: run' not in str(err)
+        else:
+            raise AssertionError('missing file accepted')
+    print('test_read_tsv_names_the_producer_when_missing passed')
+
+
 def test_group_msp_check_skips_ill_conditioned_splits():
     # consistency_checks reads only these fields; a real split_table /
     # flat_row row carries many more that are irrelevant here.
@@ -362,7 +384,7 @@ def test_group_msp_check_skips_ill_conditioned_splits():
     assert len(group) == 3
     for c in group:
         assert c['status'] == 'PASS', c
-        assert '(1 splits' in c['check'], c['check']
+        assert '(1 split,' in c['check'], c['check']  # N2: '1 split', not '1 splits'
 
     # The well-conditioned split still holds the check to its tolerance:
     # move its f32 FPR@95 by 5 points and the fpr95 row must FAIL.
@@ -394,6 +416,45 @@ def test_worst_float32_ties_excludes_well_conditioned_splits():
     # well-conditioned split standing in for one.
     assert dm.worst_float32_ties({'test': [well]}, sets) == []
     print('test_worst_float32_ties_excludes_well_conditioned_splits passed')
+
+
+def test_float32_ties_paragraph_only_when_ill_conditioned():
+    """C1: the float32-ties section's 'For these splits, ...' paragraph
+    explains the worst-gap table right above it, so it must not print when
+    that table is empty. A small, all-well-conditioned hand-made
+    write_summary input (one set, one split, delta95 well above
+    WELL_CONDITIONED) must render the 'no split is ill-conditioned' line
+    alone, without the explanatory paragraph tacked on unconditionally."""
+    key = dm.delta_key(dm.HEADLINE)
+    row = {
+        'name': 's0', 'size_A': 1, 'group_A': 'car',
+        'delta95': 1e-3,  # well-conditioned: well above WELL_CONDITIONED
+        'exact_fpr95': 10.0, 'f32_fpr95': 10.0, 'gmsp_fpr95': 10.0,
+        f'ood_div@{key}': 5.0, f'id_div@{key}': 1.0,
+        f'precision@{key}': 80.0, f'selectivity@{key}': 2.0,
+        'id_div@delta95': 1.0, 'd_auroc': 1.0, 'd_ap': 1.0, 'd_fpr95': -1.0,
+        'improvement': 3.0}
+    tables = {'cetran': [row]}
+    sets = {'cetran': dict(label='Cetran')}
+    flats = [{'set': 'Cetran', f'ood_unc@{key}': 40.0, f'id_unc@{key}': 3.0,
+             f'precision@{key}': 90.0, 'u95': 0.3, 'id_unc@u95': 1.0,
+             'msp_fpr95': 20.0}]
+    rho = [{'set': 'cetran', 'population': population, 'delta': key,
+           'statistic': statistic, 'target': target, 'rho': 0.1}
+          for population in ('single', 'all') for statistic in dm.STATISTICS
+          for target in dm.TARGETS]
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, 'summary.md')
+        dm.write_summary(path, sets, tables, flats, [], [], rho)
+        with open(path) as fh:
+            text = fh.read()
+    assert dm.worst_float32_ties(tables, sets) == []  # confirms the setup
+    assert ('No split is ill-conditioned (delta95 < '
+           f'{dm.WELL_CONDITIONED:g}) on any set.') in text
+    assert 'For these splits' not in text
+    print('test_float32_ties_paragraph_only_when_ill_conditioned passed')
+
 
 
 def test_run_end_to_end():
@@ -452,6 +513,45 @@ def test_run_end_to_end():
                         '## Single-class splits, Cetran', '## Robust splits',
                         '## Spearman rho'):
             assert section in text, section
+
+        # S9: the float32-ties section's numbers, not just its headings.
+        # The per-set ill-conditioned counts must match a direct
+        # recomputation, whatever the random dump happens to contain.
+        tie_counts = dm.float32_tie_counts(result['tables'])
+        worst = dm.worst_float32_ties(result['tables'], sets)
+        for key, (n_ill, n) in tie_counts.items():
+            row = f'| {sets[key]["label"]} | {n_ill} | {n} |'
+            assert row in text, (row, text)
+        if worst:
+            for _, name, *_rest in worst:
+                assert name in text, (name, text)
+        else:
+            # This synthetic root happens to have no ill-conditioned split
+            # (every delta95 >= WELL_CONDITIONED), which leaves no split
+            # name in the rendered text to check -- so a second render, on
+            # a copy of the real tables with one row pushed below
+            # WELL_CONDITIONED, checks that the worst-gap table lists it.
+            assert 'No split is ill-conditioned' in text
+            ill_tables = {key: [dict(r) for r in rows]
+                         for key, rows in result['tables'].items()}
+            ill_row = ill_tables['cetran'][0]
+            ill_row['delta95'] = 1e-9
+            ill_row['f32_fpr95'] = ill_row['exact_fpr95'] + 37.0
+            flats2 = dm.read_tsv(os.path.join(out, 'flat.tsv'))
+            robust_rows2 = dm.read_tsv(os.path.join(out, 'robust.tsv'))
+            # read_tsv parses every numeric-looking cell back to a number,
+            # including the 'delta' column's own key strings (e.g. '0.05'
+            # -> 0.05 as a float); write_summary's Spearman section
+            # compares that column to delta_key(...)'s string output, so
+            # it must be restored to exactly that form.
+            rho2 = [dict(r, delta=dm.delta_key(r['delta'])) for r in rho]
+            path2 = os.path.join(tmp, 'summary_ill.md')
+            dm.write_summary(path2, sets, ill_tables, flats2,
+                             result['checks'], robust_rows2, rho2)
+            with open(path2) as fh:
+                text2 = fh.read()
+            assert ill_row['name'] in text2, text2
+            assert 'No split is ill-conditioned' not in text2
     print('test_run_end_to_end passed')
 
 
@@ -459,6 +559,25 @@ def test_missing_inputs_are_explained():
     with tempfile.TemporaryDirectory() as tmp:
         root = _fake_root(tmp)
         sets = dm.resolve_sets(root)
+        # a set's random-sweep partitions.json is missing entirely (never
+        # run): refused with a message naming sweep_bipartitions.py, not a
+        # bare FileNotFoundError from open() (S3). Moved aside and
+        # restored, rather than deleted, so the scenarios below still see
+        # every set's random sweep.
+        missing_path = os.path.join(root, 'bipartitions_test_cetran',
+                                    'partitions.json')
+        aside = missing_path + '.aside'
+        os.rename(missing_path, aside)
+        try:
+            try:
+                dm.default_subsets(sets)
+            except FileNotFoundError as err:
+                assert 'sweep_bipartitions.py' in str(err)
+                assert missing_path in str(err)
+            else:
+                raise AssertionError('missing partitions.json accepted')
+        finally:
+            os.rename(aside, missing_path)
         # a sweep of the test set with another list of partitions: refused
         path = os.path.join(root, 'bipartitions_test', 'partitions.json')
         with open(path) as fh:
@@ -502,8 +621,10 @@ if __name__ == '__main__':
     test_several_directories_sum_and_backends_agree()
     test_zero_divided_counts()
     test_tsv_round_trip()
+    test_read_tsv_names_the_producer_when_missing()
     test_group_msp_check_skips_ill_conditioned_splits()
     test_worst_float32_ties_excludes_well_conditioned_splits()
+    test_float32_ties_paragraph_only_when_ill_conditioned()
     test_run_end_to_end()
     test_missing_inputs_are_explained()
     print('ALL TESTS PASSED')

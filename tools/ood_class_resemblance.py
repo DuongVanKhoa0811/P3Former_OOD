@@ -16,12 +16,13 @@ classes, against the split's own ID points:
   = no preference); r_ID(c): the same around the ID points of the other
   classes, population-weighted; contrast = r_OOD / r_ID;
 - per split A | B (the splits of tools/divided_mass.py, A the smaller
-  side): among the measured classes M (those with a finite r_OOD), R_A =
-  the sum of r_OOD over A intersect M, E_A = R_A / (100 x |A intersect M|
-  / |M|) -- the enrichment over no preference among M, not over all 24 --
-  and the OOD / ID feature-divided shares, a point is feature-divided when
-  its k neighbours include classes of both sides, the feature-space twin
-  of the divided mass; all four are NaN when A holds no measured class;
+  side), among the measured classes M (those with a finite r_OOD): R_A =
+  the sum of r_OOD over A intersect M; E_A = R_A / (100 x |A intersect M|
+  / |M|), the enrichment over no preference among M, not over all 24. The
+  OOD / ID feature-divided shares are the feature-space twin of the
+  divided mass: a point is feature-divided when its k neighbours include
+  classes of both sides. All four (R_A, E_A and the two feature-divided
+  shares) are NaN when A holds no measured class;
 - Spearman rho of these against the divided mass and the improvement of
   the same splits: for the hypothesis that the best split puts the classes
   the OOD points resemble together on one side (improvement ~ R_A, E_A)
@@ -256,6 +257,8 @@ def split_measures(a_mask, r_ood, ood_counts, ood_weight, id_counts,
 
 # ------------------------------------------------------------------ tables
 def split_rows(names, subsets, divided, measures, threshold):
+    """One row per split: R_A, E_A and the feature-divided measures, joined
+    with that split's divided-mass metrics from ``divided``."""
     key = dm.delta_key(threshold)
     R_A, E_A, fd_ood, fd_id = measures
     rows = []
@@ -290,9 +293,17 @@ def profile_rows(profile, reference, splits):
     always real measurements."""
     r_ood, r_id, contrast = profile
     by_name = {r['name']: r for r in splits}
+    names = [sb.partition_name((c, )) for c in range(NUM_CLASSES)]
+    missing = [n for n in names if n not in by_name]
+    if missing:
+        raise KeyError(
+            f'{len(missing)} single-class splits are missing from the '
+            f'divided-mass table, e.g. {missing[:3]}: score them with '
+            'tools/sweep_bipartitions.py --subsets singletons, then rerun '
+            'tools/divided_mass.py')
     rows = []
     for c in range(NUM_CLASSES):
-        single = by_name[sb.partition_name((c, ))]
+        single = by_name[names[c]]
         excluded = bool(reference[c]['excluded'])
         rows.append(OrderedDict([
             ('class', sb.CLASSES[c]), ('bank', reference[c]['bank']),
@@ -385,6 +396,10 @@ def _measured_heading(rho, key, space):
 
 def write_summary(path, sets, references, profiles, split_tables, rho, k,
                   reference=None, placement=None):
+    """Write ``summary.md``, in order: the reference banks; the
+    hypotheses' Spearman rho against the improvement; the literal-reading
+    placement table (only when ``placement`` is given); one profile table
+    per (set, space); the robust splits per set (full space only)."""
     # sets, not the module-level SETS: a caller that evaluates a subset of
     # SETS must still get the label it actually passed in.
     ref_line = ("reference: each set's own ID samples" if reference is None
@@ -507,7 +522,7 @@ def _reference_bundle(label, ood, weight, bank_per_class, query_per_class,
 # --------------------------------------------------------------------- main
 def run(sets, divided_dir, out_dir, k=10, bank_per_class=4000,
         query_per_class=2000, threshold=dm.HEADLINE, device='cuda:0', seed=0,
-        spaces=SPACES, reference=None):
+        spaces=SPACES, reference=None, chunk=8192):
     """Every output for ``sets`` (see :func:`resolve_sets`); returns
     (profiles, split_tables, rho), the first two keyed by (set, space).
 
@@ -533,7 +548,8 @@ def run(sets, divided_dir, out_dir, k=10, bank_per_class=4000,
         t0 = time.time()
         divided = OrderedDict(
             (r['name'], r)
-            for r in dm.read_tsv(osp.join(divided_dir, f'{key}.tsv')))
+            for r in dm.read_tsv(osp.join(divided_dir, f'{key}.tsv'),
+                                 producer='tools/divided_mass.py'))
         names = list(divided)
         subsets = [subset_of(name) for name in names]
         a_mask = sb.subsets_to_mask(subsets)
@@ -554,10 +570,10 @@ def run(sets, divided_dir, out_dir, k=10, bank_per_class=4000,
             ref = space_features(bank_samples, space, bank)
             ood_counts = knn_class_counts(
                 space_features(samples, space, ood_index), ref,
-                bank_samples['label'][bank], k, device)
+                bank_samples['label'][bank], k, device, chunk)
             id_counts = knn_class_counts(
                 space_features(bank_samples, space, query), ref,
-                bank_samples['label'][bank], k, device)
+                bank_samples['label'][bank], k, device, chunk)
             profile = class_profile(ood_counts, weight[ood_index], id_counts,
                                     bank_samples['label'][query], q_weight, k,
                                     excluded)
@@ -609,6 +625,8 @@ def main():
     ap.add_argument('--reference', choices=list(SETS), default=None,
                     help="draw the bank and the ID queries from this set's "
                     "samples instead of each set's own")
+    ap.add_argument('--chunk', type=int, default=8192,
+                    help='query points per GPU batch in the kNN')
     args = ap.parse_args()
     if args.threshold not in dm.DELTAS:
         ap.error('--threshold must be one of '
@@ -618,7 +636,8 @@ def main():
         args.out_dir or osp.join(args.root, 'resemblance'), k=args.k,
         bank_per_class=args.bank_per_class,
         query_per_class=args.query_per_class, threshold=args.threshold,
-        device=args.device, seed=args.seed, reference=args.reference)
+        device=args.device, seed=args.seed, reference=args.reference,
+        chunk=args.chunk)
 
 
 if __name__ == '__main__':
