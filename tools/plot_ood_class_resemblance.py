@@ -48,6 +48,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 from matplotlib.lines import Line2D  # noqa: E402
+from matplotlib.patheffects import withStroke  # noqa: E402
 
 sys.path.insert(0, osp.dirname(osp.abspath(__file__)))
 
@@ -55,6 +56,13 @@ import divided_mass as dm  # noqa: E402
 import ood_class_resemblance as res  # noqa: E402
 import plot_divided_mass as pdm  # noqa: E402
 import sweep_bipartitions as sb  # noqa: E402
+
+# Ruling 23: a thin white halo keeps a value label legible where the
+# dashed no-preference line crosses it (a bare '-28.6' can read as '+28.6'
+# once the dash cuts the minus). No facecolor is set anywhere in this file
+# or plot_divided_mass.py, so plain white matches the figure's actual
+# background.
+VALUE_HALO = [withStroke(linewidth=2.5, foreground='white')]
 
 
 def load(res_dir, space):
@@ -87,7 +95,12 @@ def profile_figure(labels, profiles, appearance, stem):
     A class with no ID samples in the set's kNN bank has NaN r_ood / r_id
     (tools/ood_class_resemblance.py's 'excluded' classes): its row gets no
     bar and no appearance marker -- only a grey x at 0 and a grey 'not in
-    the bank' caption, so it is never mistaken for an actual 0 % share."""
+    the bank' caption, so it is never mistaken for an actual 0 % share.
+    Every value label and 'not in the bank' caption carries a white halo
+    (Ruling 23), so the dashed no-preference line does not cut a minus
+    sign into reading as a plus; the absent-class x markers are drawn
+    unclipped, so the one sitting at x = 0 is not half swallowed by the
+    axis."""
     last = list(profiles)[-1]
     order = [r['class'] for r in sorted(
         profiles[last], key=lambda r: np.nan_to_num(r['r_ood'], nan=-1.0))]
@@ -143,15 +156,16 @@ def profile_figure(labels, profiles, appearance, stem):
             ax.text(r['text_x'], row_y[r['c']] + 0.2,
                     pdm.signed(r['improvement']), va='center', fontsize=5.5,
                     color=pdm.GAIN_TXT if r['improvement'] > 0
-                    else pdm.DROP_TXT)
+                    else pdm.DROP_TXT, path_effects=VALUE_HALO)
         if absent:
             ax.scatter([0.0] * len(absent),
                        [row_y[r['c']] for r in absent], marker='x', s=18,
-                       color=pdm.NA, linewidths=0.8, zorder=4)
+                       color=pdm.NA, linewidths=0.8, zorder=4, clip_on=False)
             for r in absent:
                 ax.text(r['text_x'], row_y[r['c']],
                         f"not in the bank ({pdm.signed(r['improvement'])})",
-                        va='center', fontsize=5.5, color=pdm.NA)
+                        va='center', fontsize=5.5, color=pdm.NA,
+                        path_effects=VALUE_HALO)
         ax.axvline(100.0 / sb.NUM_CLASSES, color='0.4', ls=(0, (3, 2)),
                    lw=0.6)
         ax.set_xlim(0, x_upper)

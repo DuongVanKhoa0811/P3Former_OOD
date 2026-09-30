@@ -117,8 +117,56 @@ def test_feature_panels_skips_unmeasured_classes():
     print('test_feature_panels_skips_unmeasured_classes passed')
 
 
+def test_profile_figure_labels_have_a_halo_and_x_is_unclipped():
+    """Ruling 23: every value label / 'not in the bank' caption in
+    profile_figure carries a white withStroke halo (so the dashed
+    no-preference line cannot turn a minus into a plus), and the
+    absent-class x markers are drawn with clip_on=False (so the one at
+    x = 0 is not half swallowed by the axis)."""
+    import matplotlib
+    matplotlib.use('Agg')
+    from matplotlib.patheffects import withStroke
+    import plot_divided_mass as pdm
+    import plot_ood_class_resemblance as pcr
+
+    labels = OrderedDict([('cetran', 'Cetran'), ('test', 'Test'),
+                          ('test_cetran', 'Test + Cetran')])
+    rows = [
+        {'class': 'car', 'r_ood': 20.0, 'r_id': 5.0, 'improvement': -28.6},
+        # absent from the bank: NaN r_ood / r_id, drawn as an x + caption.
+        {'class': 'bicycle', 'r_ood': float('nan'), 'r_id': float('nan'),
+         'improvement': 6.6},
+    ]
+    profiles = OrderedDict((key, rows) for key in labels)
+
+    captured = {}
+    real_save = pdm.save
+    pdm.save = lambda fig, stem: captured.setdefault('fig', fig)
+    try:
+        pcr.profile_figure(labels, profiles, OrderedDict(), 'unused-stem')
+    finally:
+        pdm.save = real_save
+
+    fig = captured['fig']
+    assert len(fig.axes) == 3, 'expected one panel per set'
+    for ax in fig.axes:
+        assert ax.texts, 'no value/caption text drawn'
+        for t in ax.texts:
+            effects = t.get_path_effects() or []
+            assert any(isinstance(e, withStroke) for e in effects), (
+                f'{t.get_text()!r} has no white halo')
+        # the one PathCollection per panel is the absent-class x markers
+        # (the appearance-space marker scatter is skipped: no appearance
+        # data was passed in).
+        assert ax.collections, 'no x marker drawn for the absent class'
+        assert all(c.get_clip_on() is False for c in ax.collections), (
+            'the absent-class x marker is clipped to the axes')
+    print('test_profile_figure_labels_have_a_halo_and_x_is_unclipped passed')
+
+
 if __name__ == '__main__':
     test_figures_are_written()
     test_label_x_clears_the_bar_and_the_marker()
     test_feature_panels_skips_unmeasured_classes()
+    test_profile_figure_labels_have_a_halo_and_x_is_unclipped()
     print('ALL TESTS PASSED')
