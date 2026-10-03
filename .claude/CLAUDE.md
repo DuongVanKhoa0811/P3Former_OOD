@@ -33,11 +33,11 @@ The detailed instructions are split by topic into `.claude/rules/`. Rules withou
 | `architecture/model.md` | segmentor and P3Former head internals (scoped: `p3former/`) |
 | `architecture/ood-pipeline.md` | how OOD scores flow from the head to the metric |
 
-## Progress log (updated 2026-09-29)
+## Progress log (updated 2026-10-04)
 
 Numbers are AUROC / AP / FPR@95 in %. The dates in brackets are the `DOCs.md` entries with the commands and full tables.
 
-### Completed from 2026-08-12 to 2026-09-29
+### Completed from 2026-08-12 to 2026-09-30
 
 - **Flat OOD baselines**: MSP, MaxLogit, ODIN, Energy and Entropy, computed from the auxiliary semantic branch. They were evaluated on SemanticKITTI val (official and our 2xb1 checkpoint) and on DSO test and test + Cetran [08-12, 08-19, 08-21].
 - **Group and GN scores** (GroupPaper) with the six-group hierarchy [08-21].
@@ -55,47 +55,42 @@ Numbers are AUROC / AP / FPR@95 in %. The dates in brackets are the `DOCs.md` en
   - About 0.9 GB of obsolete runs were removed from `work_dirs/`.
   - Branch `duy/ood-baselines` was created for the collaborator.
 - **Branch split** (2026-09-29): the flat baselines now live on `ood-baselines/flat`, and this branch replays the grouping commits on top of it. The old `ood-baselines` is kept as `archive/ood-baselines-pre-split`.
+- **Single-class sweeps and divided mass** [09-30]:
+  - all 24 single-class splits scored on the three sets;
+  - the divided mass m = min(P_A, P_B) of all 503 splits, validated against the sweep, with all 21 checks passing;
+  - 33 splits beat flat on all three sets.
+- **Feature samples and OOD resemblance** [09-30]:
+  - `pe_features` samples of Cetran (1.25 M) and test (3.0 M), on `/mnt/sandisk` and symlinked as `features_{cetran,test}`;
+  - the kNN resemblance per class and per split, the literal placement test, a cross-set bank and a t-SNE view.
 
 ### Current status
 
 | Component | Status |
 | --- | --- |
 | Trained models | `work_dirs/p3former_2xb1_3x_{dso,semantickitti}/epoch_36.pth`. DSO test PQ 46.50, mIoU 48.66. SemanticKITTI val PQ 60.32, against 62.63 for the official checkpoint. |
-| Online OOD scoring and metric | Complete; 59 tests pass. Energy is the best flat score, 92.88 / 35.55 / 37.94 on DSO test + Cetran. GN Energy (online, valid) reaches 93.94 / 36.31 / 29.96. |
+| Online OOD scoring and metric | Complete; the suite passes (count in `rules/testing.md`). Energy is the best flat score, 92.88 / 35.55 / 37.94 on DSO test + Cetran. GN Energy (online, valid) reaches 93.94 / 36.31 / 29.96. |
 | Six-group hierarchy ablation | Run on Cetran only. The winner `p_v_hgcno` (96.00 / 47.23 / 18.42, against 90.42 / 28.27 / 32.32 for flat MSP) **does not transfer**. On test its Group MSP is 87.21 / 17.23 / 68.02, against 86.26 / 13.76 / 51.15 for flat MSP. |
-| Bipartition sweep, Group family | Done on all three splits; the outputs are in `work_dirs/p3former_2xb1_3x_dso_ood_dump/bipartitions{,_test,_test_cetran}/`. Best on Cetran: `s1.3.17` {bicycle, truck, gate}, 96.84 / 54.34 / 17.13. Best on test and on test + Cetran: `s16` {overhead-bridge}, 94.04 / 40.45 / 28.52 on test + Cetran, against 87.76 / 18.06 / 45.76 for flat MSP. 32 splits beat flat on both Cetran and test. The Cetran~test rank correlation of the improvement is only +0.61. **None is confirmed online yet.** |
+| Bipartition sweep, Group family | Done on all three splits; the outputs are in `work_dirs/p3former_2xb1_3x_dso_ood_dump/bipartitions{,_test,_test_cetran}/`. Best on Cetran: `s1.3.17` {bicycle, truck, gate}, 96.84 / 54.34 / 17.13. Best on test and on test + Cetran: `s16` {overhead-bridge}, 94.04 / 40.45 / 28.52 on test + Cetran, against 87.76 / 18.06 / 45.76 for flat MSP. 32 splits beat flat on both Cetran and test. With the 24 single-class splits added, 33 beat flat on all three sets. The Cetran~test rank correlation of the improvement is only +0.61. **None is confirmed online yet.** |
 | Bipartition sweep, GN family | Offline GN MSP and GN Entropy are invalid, because those scores pile up at an interior value that the bins don't resolve. They are not ranked. Fixing this needs interior-adaptive bins or online runs. |
+| Divided mass | Done on all three sets, in `work_dirs/p3former_2xb1_3x_dso_ood_dump/divided_mass/`. Divided precision, the OOD share of the points with mass on both sides, predicts the improvement: ρ 0.72–0.74 over all splits at δ = 0.05, and 0.79–0.84 at δ = 0.3. FPR@95 equals the ID divided share at δ95. The implemented float32 Group MSP ties below m ≈ 6e-8, so its FPR@95 is unreliable on 21 / 50 / 43 splits; the tool reports exact values next to it. |
+| OOD resemblance | Done: `resemblance/` (k = 10), `resemblance_k50/` and `resemblance_xref/` (the Test + Cetran bank). The OOD points resemble building, perimeter-barrier and gate. The class-level ρ(r_OOD, improvement) is 0.76 on test, and 0.91 without the positional embedding. The best splits cut through the OOD neighbourhoods rather than grouping the resembled classes. |
 | Collaborator branch | `origin/duy/ood-baselines` forks from the pre-split history at `90af8ea`, whose counterpart on this branch is `749328a`. It adds `tools/ood_distance.py` (Mahalanobis feature-distance OOD plus a 203-partition sweep, 2026-09-07). It is not merged, and it lacks everything after that commit. |
 
-### Next step: why do some two-group splits beat the flat scores?
+### Findings: why some two-group splits beat the flat scores (2026-09-30)
 
-The goal is to explain, from the dumps and without the GPU model, why some bipartitions beat the flat scores. Ideally the explanation should predict good splits without a sweep.
+The full tables and commands are in the two `DOCs.md` entries of 2026-09-30. The spec is `docs/superpowers/specs/2026-09-29-divided-mass-resemblance-design.md`.
 
-**Working hypothesis.** With two groups, Group MSP = −max(P_A, 1 − P_A). A point scores as OOD only when its probability mass is divided across the boundary, and confusion between classes on the same side is absorbed. A split should therefore help when two things hold:
-
-- it absorbs the within-ID confusions behind flat MSP's false positives;
-- OOD points still divide their mass across it.
-
-**First test case: the divided-mass ("straddling") table.** It comes from session `65236754` (2026-09-23) and is not in `DOCs.md`. For a single-class split {c} | rest, a valid point has divided mass when 0.05 < P_c < 0.95, using the softmax of the dumped logits. The percentages are over OOD points and over ID points.
-
-| split | Cetran OOD / ID divided | Cetran improvement | test OOD / ID divided | test improvement |
-| --- | --- | --- | --- | --- |
-| {truck} | 15.6 % / 0.29 % | +25.3 | 6.4 % / 0.25 % | −2.9 |
-| {gate} | 11.4 % / 0.10 % | +17.5 | 0.5 % / 0.07 % | +6.6 |
-| {overhead-bridge} | 11.1 % / 0.10 % | +7.0 | 18.2 % / 0.14 % | +34.8 |
-| {bicycle} | 1.6 % / 0.04 % | +5.8 | 0.5 % / 0.07 % | −40.1 |
-| {vegetation} | 33.0 % / 7.41 % | −40.4 | 38.5 % / 11.96 % | −28.6 |
-| {building} | 52.3 % / 2.80 % | not sampled | 51.4 % / 2.56 % | not sampled |
-
-What the table does not explain yet:
-
-- On test, {bicycle} has a clean OOD/ID ratio yet scores −40.1, with FPR@95 at 89.20.
-- ID points outnumber OOD points about 33× on Cetran and 63× on test, so absolute counts may matter more than percentages. For building on test, about 26 M ID points have divided mass, against 8 M OOD points.
-
-**Analysis plan** (spec: `docs/superpowers/specs/2026-09-29-divided-mass-resemblance-design.md`). Both items are reported on Cetran, test and test + Cetran, for the single-class splits and for the robust splits (improvement > 0 on all three sets).
-
-1. **Extend the measure.** Compute divided mass for all 24 single-class splits and all 500 bipartitions, with P_A = the summed mass of the smaller group. Relate the OOD and ID divided counts to ΔAUROC, ΔAP and ΔFPR@95 on each split, and vary the 0.05/0.95 threshold. Compare every split with flat MSP at the same threshold, and draw bubble charts in the style of `trash/bubble_chart.py`.
-2. **Resemblance in feature space.** Measure how much the OOD points overlap each ID class in the penultimate features (`pe_features`, the input of the semantic classifier). The measure is a kNN share against the evaluation split's own ID points. Then test the hypothesis that the best split puts the classes the OOD objects resemble on one side, against the alternative from item 1 that it cuts through them. The test is correlational only.
+- **Mechanism.** Group MSP flags only the points whose mass is divided across the split. A split beats flat when it keeps far more of flat MSP's uncertain OOD points than of its uncertain ID points. Divided precision is the best single predictor.
+- **FPR@95 is set by depth.** It equals the ID divided share at δ95, the depth at which 95 % of the OOD points are divided. {bicycle} on test looks clean at δ = 0.05 but has δ95 ≈ 1e-9, so it scores −40.1.
+- **Why Cetran's winners do not transfer.** Truck, gate, overhead-bridge and bicycle have no ID point in Cetran.
+- **Resemblance.** The OOD points look like structures: building, perimeter-barrier and gate.
+  - Resemblance predicts the single-class winners.
+  - Overhead-bridge is the exception: the kNN sees it only without the positional embedding.
+  - The literal hypothesis, grouping the resembled classes on one side, is not supported. The best splits cut through the OOD neighbourhoods (the log feature-divided ratio has ρ 0.50–0.70 on every set).
+- **Open.**
+  - Confirm the robust splits online (`class_groups_variants`) on data they were not selected on.
+  - Decide whether `ood_scores.py` should compute Group MSP as min(P_A, P_B) in float64, so that ill-conditioned splits rank exactly.
+  - Test divided precision as a sweep-free selector: pick a split on one set and check how it transfers.
 
 ### Key decisions and how they were handled
 
@@ -115,6 +110,12 @@ What the table does not explain yet:
 - **GN offline.** After the Codex review it was withdrawn rather than patched, and the summarizer now guards against it.
 - **Long jobs.** They are started detached (`nohup setsid`), after a session interruption killed two background sweeps.
 - **Selection bias.** A split picked on one evaluation split must be confirmed on data it was not picked on before it is reported.
+- **Feature layer and resemblance.**
+  - The features are `pe_features`, the semantic classifier's input, captured by wrapping `_P3FormerHead.init_inputs`.
+  - Resemblance is a cosine kNN (k = 10, with k = 50 as a check) against a class-balanced bank of the evaluation set's own ID points. That bank was the user's choice; `--reference` adds a cross-set bank.
+  - A class missing from a bank is reported as NaN, never 0.
+  - The hypothesis test is correlational only, also the user's choice.
+- **Float32 Group MSP.** The divided-mass tool checks against the sweep only on well-conditioned splits (δ95 ≥ 1e-5), and reports float32 and exact metrics side by side.
 - **Git.** Commits and pushes happen only when asked. Pushes to protected branches use the owner bypass of the pull-request rule (see `rules/branches.md`). `CLAUDE.md` lives in `.claude/` and is tracked.
 
 ### Open housekeeping

@@ -655,3 +655,130 @@ The largest |ρ| with improvement over δ:
   - This is the poor transfer noted on 2026-09-15.
 
 **Caveat.** Divided shares are ROC operating points of Group MSP, so their link to the metric deltas is partly by construction. The explanation rests on the comparison with flat MSP (selectivity, precision) and on δ95. The splits are still selected on the evaluation data, so any split must be confirmed online before it is reported.
+
+## 2026-09-30 — Do the best splits group the classes the OOD points resemble? (feature space)
+
+The question from 09-29: which ID classes do the OOD points look like in the features the classifier reads, and does the best split "put the classes that the OOD objects resemble on one side and everything else on the other" (the 09-15 reading)?
+
+**Features.** `pe_features` is the 256-d per-point input of the semantic classifier (`sem_preds = pe_features @ sem_queriesᵀ`, bias-free). "Appearance" is `pe_features` minus the positional embedding added just before it. `tools/extract_point_features.py` captures both by wrapping `_P3FormerHead.init_inputs` on the model instance.
+- Per frame it keeps up to 64 ID points per class and 512 OOD points, each weighted to its (frame, class) stratum.
+- Cetran: 980 frames, 1,252,847 samples, 501,760 of them OOD. Test: 2,625 frames, 2,995,232 samples, 1,034,359 OOD.
+- Checks: the captured features reproduce the classifier's logits (`feat @ W^T` in float64) within 0.0073 / 0.0077. At the sampled points, the run's logits, labels and OOD flags equal those of the logit dumps; the largest logit difference is 0.0.
+
+**Measure** (`tools/ood_class_resemblance.py`): a cosine kNN (k = 10) against a class-balanced bank of ID samples. The bank holds up to 4,000 per class, drawn ∝ weight; up to 2,000 other ID points per class serve as queries.
+- r_OOD(c) is the share of class c among the OOD points' neighbours; 4.17 % means no preference.
+- r_ID(c) is the same share around the ID points of the other classes, and contrast = r_OOD / r_ID.
+- Per split A | B, with A the smaller group:
+  - R_A = Σ_{c∈A} r_OOD(c), and E_A = R_A over its no-preference value ("together": the neighbours fall in A);
+  - *feature-divided*: the k neighbours hold classes of both sides ("cut through"), with its log OOD/ID ratio;
+  - the *literal* test: the splits grouped by where the k most-resembled classes sit.
+- **Cetran has no ID point of 10 classes**: bicycle, motorcycle, truck, rider, unpaved-road, window, overhead-bridge, gate, drain, obscurant. Against its own bank (the default) they cannot be measured and are left out; that covers truck and gate, its two best splits. `--reference test_cetran` measures every set's OOD points against the Test + Cetran bank instead.
+
+```bash
+W=work_dirs/p3former_2xb1_3x_dso_ood_dump; CFG=configs/p3former/p3former_2xb1_3x_dso_ood.py; CKPT=work_dirs/p3former_2xb1_3x_dso/epoch_36.pth
+python tools/extract_point_features.py $CFG $CKPT --ann dso_infos_cetran.pkl --out-dir $W/features_cetran --check-dump $W/logits     # ~6 min, GPU
+python tools/extract_point_features.py $CFG $CKPT --ann dso_infos_test.pkl --out-dir $W/features_test --check-dump $W/logits_test  # ~7 min
+python tools/ood_class_resemblance.py --device cuda:0                                               # -> $W/resemblance/ (~1.5 min)
+python tools/ood_class_resemblance.py --device cuda:0 --k 50 --out-dir $W/resemblance_k50
+python tools/ood_class_resemblance.py --device cuda:0 --reference test_cetran --out-dir $W/resemblance_xref
+python tools/plot_ood_class_resemblance.py [$W/resemblance_xref] [--space appearance]
+python tools/plot_feature_tsne.py [--space appearance]
+```
+
+**Table A — what the OOD points resemble**: the top 8 by r_OOD (full space), as r_OOD % / r_ID %, with the improvement of {c} | rest in brackets.
+
+| rank | Cetran, own bank | Cetran, T+C bank | Test | Test + Cetran |
+| --- | --- | --- | --- | --- |
+| 1 | person 29.8 / 0.10 (−7.1) | gate 28.3 / 0.95 (+17.5) | building 26.0 / 0.51 (+16.3) | building 19.3 / 0.54 (+13.3) |
+| 2 | perimeter-barrier 28.1 / 1.14 (−11.7) | perimeter-barrier 15.5 / 1.78 (−11.7) | perimeter-barrier 15.9 / 2.78 (+5.5) | gate 15.8 / 0.95 (+10.1) |
+| 3 | other-barrier 11.8 / 1.36 (−13.8) | person 13.0 / 0.08 (−7.1) | gate 9.0 / 0.75 (+6.6) | perimeter-barrier 13.4 / 1.78 (+1.2) |
+| 4 | building 6.9 / 0.31 (+4.3) | other-barrier 8.1 / 0.75 (−13.8) | other-barrier 5.4 / 0.88 (−1.3) | person 6.2 / 0.08 (−46.7) |
+| 5 | terrain 5.2 / 1.19 (−52.4) | building 5.0 / 0.54 (+4.3) | traffic-sign 5.1 / 0.40 (−9.1) | other-barrier 6.0 / 0.75 (−5.2) |
+| 6 | sidewalk 3.3 / 9.85 (−52.2) | truck 5.0 / 0.21 (+25.2) | drain 4.1 / 1.10 (−24.2) | sidewalk 3.9 / 2.54 (−29.9) |
+| 7 | pole-like-object 3.2 / 0.11 (−18.0) | sidewalk 4.2 / 2.54 (−52.2) | bus 4.0 / 0.07 (−6.1) | drain 3.7 / 0.97 (−24.5) |
+| 8 | traffic-cone 3.0 / 0.32 (−29.6) | traffic-sign 2.9 / 0.18 (−5.2) | sidewalk 3.9 / 1.01 (−23.5) | bus 3.6 / 0.09 (−7.0) |
+
+**Table B — class level**: Spearman ρ over the classes, full / appearance space. For Cetran with its own bank, ρ is over the 14 measured classes.
+
+| run | set | r_OOD ~ improvement | r_OOD ~ OOD div % | contrast ~ improvement |
+| --- | --- | --- | --- | --- |
+| k = 10 | Cetran (own bank) | 0.34 / 0.46 | 0.27 / 0.23 | 0.69 / 0.82 |
+| k = 10 | Cetran (T+C bank) | 0.62 / 0.67 | 0.36 / 0.37 | 0.71 / 0.73 |
+| k = 10 | Test | 0.76 / 0.91 | 0.61 / 0.63 | 0.22 / 0.45 |
+| k = 10 | Test + Cetran | 0.63 / 0.80 | 0.56 / 0.54 | 0.33 / 0.39 |
+| k = 50 | Cetran (own bank) | 0.27 / 0.45 | 0.29 / 0.21 | 0.67 / 0.82 |
+| k = 50 | Test | 0.73 / 0.91 | 0.60 / 0.63 | 0.24 / 0.43 |
+| k = 50 | Test + Cetran | 0.62 / 0.79 | 0.53 / 0.54 | 0.31 / 0.45 |
+
+**Table C — split level**: ρ with the improvement over all 503 splits, full / appearance.
+
+| set | together: R_A | together: E_A | cut through: OOD feature-divided | cut through: log ratio |
+| --- | --- | --- | --- | --- |
+| Cetran (own bank) | 0.18 / 0.23 | 0.22 / 0.30 | 0.06 / 0.22 | 0.63 / 0.70 |
+| Cetran (T+C bank) | 0.34 / 0.36 | 0.38 / 0.42 | 0.35 / 0.36 | 0.59 / 0.63 |
+| Test | 0.43 / 0.48 | 0.49 / 0.59 | 0.34 / 0.44 | 0.50 / 0.55 |
+| Test + Cetran | 0.40 / 0.44 | 0.48 / 0.56 | 0.35 / 0.41 | 0.60 / 0.65 |
+
+**Literal reading** (`placement.tsv`, full space): the splits grouped by where the 2 (3) most-resembled classes sit, as the median improvement and the % of splits with improvement > 0.
+
+| set | classes | small side (all in A) | large side (all in B) | apart |
+| --- | --- | --- | --- | --- |
+| Cetran (own bank) | person, perimeter-barrier | −12.3, 2 % (n = 41) | −15.7, 17 % (276) | −12.7, 8 % (186) |
+| Cetran (T+C bank) | gate, perimeter-barrier | −15.5, 0 % (n = 44) | −20.4, 11 % (265) | −10.4, 17 % (194) |
+| Test | building, perimeter-barrier | −2.7, 45 % (40) | −18.3, 12 % (269) | −2.8, 45 % (194) |
+| Test | + gate | −5.8, 33 % (12) | −21.5, 11 % (194) | −4.5, 37 % (297) |
+| Test + Cetran | building, gate | −2.6, 29 % (41) | −18.3, 15 % (256) | −7.3, 24 % (206) |
+| Test + Cetran | + perimeter-barrier | −11.6, 0 % (12) | −25.1, 9 % (194) | −6.1, 28 % (297) |
+
+**Table D — the Part 1 robust splits in the features** (Test + Cetran, full space; the log ratio in the appearance space in brackets).
+
+| split | R_A % | E_A | OOD feat-div % | ID feat-div % | log ratio | imp |
+| --- | --- | --- | --- | --- | --- | --- |
+| `s0.1.3.5.10.16` | 14.6 | 0.59 | 33.9 | 17.3 | 0.29 (0.40) | +18.7 |
+| `s2.3.4.5.6.16` | 15.6 | 0.63 | 33.5 | 4.8 | 0.84 (1.00) | +21.0 |
+| `s0.2.5.16.17.18.19` | 30.6 | 1.05 | 58.5 | 14.0 | 0.62 (0.66) | +17.3 |
+| `s2.3.10.12.17.18.19` | 46.5 | 1.59 | 69.2 | 27.2 | 0.41 (0.37) | +18.0 |
+| `s10.12.17.18.19` | 42.4 | 2.04 | 67.1 | 26.5 | 0.40 (0.37) | +17.9 |
+| `s0.1.2.3.4.6.7.10.16.17.18` | 34.6 | 0.75 | 62.6 | 23.5 | 0.43 (0.41) | +14.8 |
+| `s3.16.18` | 6.5 | 0.52 | 18.5 | 5.5 | 0.53 (0.80) | +12.7 |
+| `s7.13.16.17.23` | 23.8 | 1.14 | 52.7 | 12.3 | 0.63 (0.69) | +12.2 |
+| `s10.12.17.19` | 40.3 | 2.42 | 65.2 | 24.6 | 0.42 (0.39) | +18.3 |
+| `s2.16` | 2.3 | 0.27 | 6.4 | 3.2 | 0.29 (0.76) | +26.2 |
+
+**Figures** (`$W/resemblance/`, and the same names in `$W/resemblance_xref/`):
+- `profile_{full,appearance}`: r_OOD and r_ID per class, with the appearance-space r_OOD as rings;
+- `bubble_feature_singletons_{full,appearance}`: OOD vs ID feature-divided share of the single-class splits;
+- `hypothesis_{full,appearance}`: improvement against R_A, the OOD feature-divided share and the log ratio;
+- `tsne_{full,appearance}`: t-SNE of the feature samples, with one fixed colour per class and OOD in black (in `$W/resemblance/` only).
+
+**Reading.**
+- **What the OOD points resemble: mostly structures.**
+  - On Test: building (26 %), perimeter-barrier (16 %) and gate (9 %).
+  - On Test + Cetran: building, gate and perimeter-barrier (19 / 16 / 13 %).
+  - On Cetran against the full bank: gate leads (28 %), then perimeter-barrier and person (16 / 13 %). Truck is sixth (5.0 %), with a contrast of 24.
+
+  The resemblance is spread: the top class takes 19–30 % of the neighbours, and the top three about half.
+- **At the class level, resemblance matches the winning splits, with one exception.**
+  - On Test, the three most-resembled classes are exactly the three positive single-class splits besides overhead-bridge.
+  - Over the classes, ρ(r_OOD, improvement) is 0.76 on Test, 0.63 on Test + Cetran and 0.62 on Cetran with the full bank. It is only 0.34 over Cetran's own 14 measured classes, which lack truck and gate.
+  - r_OOD also tracks Part 1's OOD divided share (ρ 0.61 / 0.56 / 0.36): OOD points that neighbour class c in the features also carry classifier mass on c.
+  - **Overhead-bridge is the exception.** It is the best split on Test and Test + Cetran (+34.8 / +27.4), yet its r_OOD is only 1.4 %, below no preference. In the appearance space it rises to 6.0 %, and 21 % of the OOD points are feature-divided on it, against 2.4 % of the ID points. So the positional part of `pe_features` hides this resemblance from the kNN, while the linear classifier still puts overhead-bridge mass on 18 % of the OOD points (Part 1).
+- **The appearance space**, without the positional embedding, strengthens the class-level alignment with the improvement: ρ(r_OOD, improvement) is 0.91 / 0.80 / 0.67 on Test / Test + Cetran / Cetran (full bank), against 0.76 / 0.63 / 0.62. The top classes stay the same.
+- **At the split level, the literal hypothesis is not supported.**
+  - Putting the two or three most-resembled classes together on the small side does no better than separating them. The share of splits with a positive improvement is:
+    - Test: 45 vs 45 %;
+    - Test + Cetran: 29 vs 24 % for the top 2, and 0 vs 28 % for the top 3;
+    - Cetran: 0–7 vs 6–17 %.
+  - What does hurt on Test and Test + Cetran is lumping those classes with everything else: the large side has a median improvement of −18 to −25.
+  - An example from Test: {overhead-bridge} scores +34.8 and {building} +16.3, but {building, overhead-bridge} only +14.3, although its E_A (3.3) is ten times {overhead-bridge}'s (0.34).
+  - Over all splits, the "cut through" statistic (the log OOD/ID feature-divided ratio) predicts on every set, in both spaces and with either bank: ρ 0.50–0.70. "Together" (E_A) predicts on Test and Test + Cetran (0.48–0.59) but only weakly on Cetran (0.22 with its own bank, 0.38 with the full bank).
+  - The top robust splits (Table D) have E_A from 0.27 to 2.4, so "togetherness" is not what they share. What they share is a log ratio ≥ 0.29: their OOD points are feature-divided 2–7× more often than their ID points.
+- **The hypothesis, refined.** The best split cuts *through* the OOD points' neighbourhoods. It puts one (or a few) of the classes the OOD points lean toward against the rest. The OOD mass, spread over several resembled classes, then straddles the boundary, while each ID class's usual confusers stay on its own side. This is Part 1's divided precision seen from the features. The feature ratio ranks the splits less well than the logit-space precision does (ρ 0.50–0.70 vs 0.72–0.84), so the neighbourhoods explain part of the effect, not all of it.
+- **k = 50.** The r_OOD ranking barely moves: its rank ρ with k = 10 is 0.95–0.996, with the same top three. The headline ρ of Tables B and C move by ≤ 0.07.
+- **t-SNE** (`tsne_{full,appearance}`; 300 ID points per class and 1,000 OOD points per set). This view is qualitative: t-SNE keeps neighbourhoods, not distances.
+  - In the appearance space, the ID classes form clean clusters. The OOD points gather in a region of their own, which borders building, window, perimeter-barrier, gate and other-barrier on Test and Test + Cetran, and perimeter-barrier, other-barrier and person on Cetran. This is the kNN picture of Table A.
+  - In the full space, position splits every class into several clusters, and the OOD points spread among them, mostly next to the barriers, building and window. On Cetran, the Stop points form small tight clusters of their own.
+- **Caveats.**
+  - The test is correlational only, over splits selected on the evaluation data.
+  - The kNN reads neighbourhoods, while the classifier is linear on the same features, and overhead-bridge shows the two can disagree.
+  - Cetran's own-bank numbers cover only its 14 measured classes.
