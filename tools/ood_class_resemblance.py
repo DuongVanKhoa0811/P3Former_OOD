@@ -147,10 +147,14 @@ def subset_of(name):
 # --------------------------------------------------------------- reference
 def select_reference(label, ood, weight, bank_per_class, query_per_class,
                      rng, min_samples=MIN_CLASS_SAMPLES):
-    """Class-balanced bank and disjoint ID queries, both drawn in proportion
-    to the sampling weights: a class keeps n // 3 (at most query_per_class)
-    samples as queries and puts up to bank_per_class of the rest in the
-    bank. Returns (bank index, query index, one table row per class)."""
+    """Class-balanced bank and disjoint ID queries: a class keeps n // 3 (at
+    most query_per_class) samples as queries and puts up to bank_per_class
+    of the rest in the bank. One weighted draw without replacement, in
+    proportion to the sampling weights, is shuffled and then split, so both
+    parts follow the same distribution. The shuffle matters: the draw is
+    sequential, its early picks favour high weights, and an unshuffled split
+    would give the bank the heavy samples and the queries the light
+    leftovers. Returns (bank index, query index, one table row per class)."""
     bank, query, table = [], [], []
     for c in range(NUM_CLASSES):
         members = np.flatnonzero((label == c) & ~ood)
@@ -162,6 +166,10 @@ def select_reference(label, ood, weight, bank_per_class, query_per_class,
             p = weight[members] / weight[members].sum()
             chosen = members[rng.choice(n, n_bank + n_query, replace=False,
                                         p=p)]
+            # the draw is sequential (early picks favour heavy samples), so
+            # shuffle before splitting: bank and queries then share one
+            # distribution
+            chosen = rng.permutation(chosen)
             bank.append(chosen[:n_bank])
             query.append(chosen[n_bank:])
         table.append(OrderedDict([

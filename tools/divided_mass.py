@@ -64,7 +64,8 @@ Outputs in --out-dir (default <root>/divided_mass):
     rho.tsv          Spearman correlations, long format
     summary.md       consistency checks (FAIL rows included), tables, rho
 
-Run from the repo root after the sweeps (about 15 min on a GPU):
+Run from the repo root after the sweeps (about 7 min on a GPU with
+--backend torch, much longer with --backend numpy):
     python tools/divided_mass.py --backend torch --device cuda:0
     python tools/plot_divided_mass.py
 """

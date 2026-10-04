@@ -283,6 +283,35 @@ def test_reference_selection():
     print('test_reference_selection passed')
 
 
+def test_select_reference_bank_and_queries_share_the_weight_distribution():
+    """Final review, Minor 3. numpy's weighted draw without replacement is
+    sequential, so splitting it unshuffled gave the bank the high-weight
+    samples and the queries the low-weight leftovers (overhead-bridge on the
+    real Test samples: mean query weight 6.1, against 39.7 for a
+    weight-proportional draw). The two parts must be exchangeable halves of
+    one draw, so their mean weights agree. One class with heavy-tailed
+    weights and large parts; the mean weights are taken over 10 seeded draws,
+    because a single draw of this infinite-variance distribution scatters the
+    queries / bank ratio over roughly 0.6-1.6 even when the split is right,
+    and one draw would pass or fail by luck."""
+    n, bank_per_class, query_per_class, draws = 3000, 600, 300, 10
+    weight = np.random.default_rng(0).pareto(1.5, n) + 1e-3
+    label, ood = np.zeros(n, dtype=np.int64), np.zeros(n, dtype=bool)
+    bank_mean, query_mean = [], []
+    for seed in range(draws):
+        bank, query, _ = res.select_reference(
+            label, ood, weight, bank_per_class, query_per_class,
+            np.random.default_rng(seed))
+        assert len(bank) == bank_per_class and len(query) == query_per_class
+        bank_mean.append(weight[bank].mean())
+        query_mean.append(weight[query].mean())
+    ratio = np.mean(query_mean) / np.mean(bank_mean)
+    assert 0.8 <= ratio <= 1.25, (
+        f"the queries' mean weight is {ratio:.2f} x the bank's")
+    print('test_select_reference_bank_and_queries_share_the_weight_'
+          'distribution passed')
+
+
 def test_profile_rows_names_missing_splits():
     """S4: profile_rows' singleton lookup used to be a bare dict index
     (KeyError: 's0', no context); it must now name the missing split(s)
@@ -543,6 +572,7 @@ if __name__ == '__main__':
     test_placement_rows_ties_and_short_sk()
     test_measured_heading_ranges()
     test_reference_selection()
+    test_select_reference_bank_and_queries_share_the_weight_distribution()
     test_profile_rows_names_missing_splits()
     test_missing_inputs_are_explained()
     test_run_end_to_end()

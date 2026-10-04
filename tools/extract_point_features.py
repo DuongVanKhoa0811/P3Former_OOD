@@ -25,7 +25,8 @@ test.py's numerics, which also wrote the logits dumps); with --check-dump
 the sampled logits, labels and OOD flags must equal those of a logits dump
 at the same points (frames matched by lidar_path).
 
-Run from the repo root (one GPU, ~25 GB; Cetran ~10 min, test ~25 min):
+Run from the repo root (one GPU, ~25 GB; Cetran ~6 min, test ~7 min on an
+RTX 6000 Ada):
     CUDA_VISIBLE_DEVICES=0 python tools/extract_point_features.py \\
         configs/p3former/p3former_2xb1_3x_dso_ood.py \\
         work_dirs/p3former_2xb1_3x_dso/epoch_36.pth \\
