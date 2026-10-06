@@ -33,11 +33,11 @@ The detailed instructions are split by topic into `.claude/rules/`. Rules withou
 | `architecture/model.md` | segmentor and P3Former head internals (scoped: `p3former/`) |
 | `architecture/ood-pipeline.md` | how OOD scores flow from the head to the metric |
 
-## Progress log (updated 2026-10-04)
+## Progress log (updated 2026-10-06)
 
 Numbers are AUROC / AP / FPR@95 in %. The dates in brackets are the `DOCs.md` entries with the commands and full tables.
 
-### Completed from 2026-08-12 to 2026-09-30
+### Completed from 2026-08-12 to 2026-10-06
 
 - **Flat OOD baselines**: MSP, MaxLogit, ODIN, Energy and Entropy, computed from the auxiliary semantic branch. They were evaluated on SemanticKITTI val (official and our 2xb1 checkpoint) and on DSO test and test + Cetran [08-12, 08-19, 08-21].
 - **Group and GN scores** (GroupPaper) with the six-group hierarchy [08-21].
@@ -63,13 +63,18 @@ Numbers are AUROC / AP / FPR@95 in %. The dates in brackets are the `DOCs.md` en
   - `pe_features` samples of Cetran (1.25 M) and test (3.0 M), on `/mnt/sandisk` and symlinked as `features_{cetran,test}`;
   - the kNN resemblance per class and per split, the literal placement test, a cross-set bank and a t-SNE view;
   - re-run on 2026-10-04 after a sampling fix (the bank and the ID queries come from one shuffled weighted draw), with seeds 0–2.
+- **Reviews of the split-analysis tools** [09-30]:
+  - a maintainability review of the six new tools found 13 issues, all fixed, with a test for each behavioural fix;
+  - a final whole-branch review (2026-10-04) corrected two documented conclusions, the Cetran → test transfer mechanism and the online metric's resolution, and removed a sampling bias in the kNN bank;
+  - a re-review then recomputed about 840 documented numbers from the outputs;
+  - the branch was pushed to origin on 2026-10-06.
 
 ### Current status
 
 | Component | Status |
 | --- | --- |
 | Trained models | `work_dirs/p3former_2xb1_3x_{dso,semantickitti}/epoch_36.pth`. DSO test PQ 46.50, mIoU 48.66. SemanticKITTI val PQ 60.32, against 62.63 for the official checkpoint. |
-| Online OOD scoring and metric | Complete; the suite passes (count in `rules/testing.md`). Energy is the best flat score, 92.88 / 35.55 / 37.94 on DSO test + Cetran. GN Energy (online, valid) reaches 93.94 / 36.31 / 29.96. |
+| Online OOD scoring and metric | Complete; the suite passes (count in `rules/testing.md`). Energy is the best flat score, 92.88 / 35.55 / 37.94 on DSO test + Cetran. GN Energy (online, valid) reaches 93.94 / 36.31 / 29.96. Known limit: the metric's 2^20 equal-width bins cannot separate Group MSP points with divided mass m below ≈ 4.8e-7, which affects splits whose OOD points carry almost no mass on the far side (see "Divided mass"). |
 | Six-group hierarchy ablation | Run on Cetran only. The winner `p_v_hgcno` (96.00 / 47.23 / 18.42, against 90.42 / 28.27 / 32.32 for flat MSP) **does not transfer**. On test its Group MSP is 87.21 / 17.23 / 68.02, against 86.26 / 13.76 / 51.15 for flat MSP. |
 | Bipartition sweep, Group family | Done on all three splits; the outputs are in `work_dirs/p3former_2xb1_3x_dso_ood_dump/bipartitions{,_test,_test_cetran}/`. Best on Cetran: `s1.3.17` {bicycle, truck, gate}, 96.84 / 54.34 / 17.13. Best on test and on test + Cetran: `s16` {overhead-bridge}, 94.04 / 40.45 / 28.52 on test + Cetran, against 87.76 / 18.06 / 45.76 for flat MSP. 32 splits beat flat on both Cetran and test. With the 24 single-class splits added, 33 beat flat on all three sets. The Cetran~test rank correlation of the improvement is only +0.61. **None is confirmed online yet.** |
 | Bipartition sweep, GN family | Offline GN MSP and GN Entropy are invalid, because those scores pile up at an interior value that the bins don't resolve. They are not ranked. Fixing this needs interior-adaptive bins or online runs. |
