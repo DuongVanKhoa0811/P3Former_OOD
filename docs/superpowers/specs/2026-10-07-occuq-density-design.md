@@ -217,7 +217,8 @@ The tool only reads logs.
    - Every voxel, in float64 running sums, instead of capped float32 samples.
    - A per-class jitter.
    - Priors from all voxels.
-   - Voxel labels by majority vote of their points (P3Former's own voxel targets), and no "unoccupied" class.
+   - Voxel labels by majority vote of their points' class labels. With instance masks, P3Former's training targets vote by panoptic segment first and take that segment's class; the two differ only in voxels shared by several segments.
+   - No "unoccupied" class.
 5. **Scoring.** Centred before the product, in float32 with TF32 off (OCCUQ's code leaves TF32 on), and emitted as asinh(−log q).
 6. **Evaluation.** The project's point-level protocol, not OCCUQ's scene-level one.
 
