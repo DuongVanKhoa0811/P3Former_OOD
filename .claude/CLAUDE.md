@@ -90,7 +90,7 @@ The full tables and commands are in the two `DOCs.md` entries of 2026-09-30. The
   - The literal hypothesis, grouping the resembled classes on one side, gets mixed support. On test it is about as good as separating them, on Cetran it is worse, and lumping them with everything else is the worst placement. The cut-through log feature-divided ratio is the most consistent predictor (ρ 0.48–0.70 on every set).
 - **Open.**
   - Confirm the robust splits online (`class_groups_variants`) on data they were not selected on.
-  - Before that, fix the online resolution. Either score Group MSP as log min(P_A, P_B), which is monotone in m and survives float32 storage and equal-width bins, or give `evaluation/functional/ood_eval.py` log-spaced bins. Until then, {gate} on test (δ95 = 4.0e-7) cannot be confirmed online.
+  - Before that, fix the online resolution. Either score Group MSP as log min(P_A, P_B), which is monotone in m and survives float32 storage and equal-width bins, or give `evaluation/functional/ood_eval.py` log-spaced bins. Until then, {gate} on test (δ95 = 4.0e-7) cannot be confirmed online, and its test + Cetran FPR@95 reads about 5 points high.
   - Divided precision is a cheaper proxy, not a label-free selector: it needs the OOD labels of the set it is computed on. Test whether a split picked by it on one set transfers to another.
 
 ### Key decisions and how they were handled

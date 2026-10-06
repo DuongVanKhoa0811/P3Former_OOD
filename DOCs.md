@@ -566,7 +566,8 @@ The first run caught two defects before these checks passed: the u histograms we
 **Float32 ties in the implemented Group MSP, and the online bins.** The sweep ranks points by the float32 score −max(P_A, P_B), which cannot separate points with m < 2⁻²⁴ ≈ 6e-8. The online metric of `test.py` is coarser still. It puts every score into 2^20 equal-width bins between the scores' minimum and maximum; Group MSP spans about 0.5, so every point with m below ≈ 4.8e-7 falls into one bin.
 - On 21 / 50 / 43 splits, catching 95 % of the OOD points needs a threshold below m ≈ 1e-5. For those splits the implemented FPR@95 depends on float32 rounding, and online also on the binning.
 - For example, {bicycle} on Test reads 89.20 in the sweep, 100 under a float32 emulation, and **80.43 exactly**. The `exact_*` columns hold the float32-free values.
-- {gate} on Test is a robust split with δ95 = 4.0e-7, which lies below the online resolution. Online, its FPR@95 lands near 42 or at 100, depending on where the bins fall, so it cannot be confirmed online as things stand.
+- {gate} on Test is a robust split with δ95 = 4.0e-7, which lies below the online resolution. Online, its FPR@95 lands near 42 or at 100, depending on where the bins fall, so it cannot be confirmed online as things stand. {gate} on Test + Cetran (δ95 = 7.1e-7) is also affected, but less: an emulation of the online bins from `histograms.npz` gives FPR@95 ≈ 39.5, against 34.0 exact, and it stays robust.
+- The same emulation gives 67.19 for `p_v_hgcno`'s Group MSP FPR@95 on test, not the online 68.02. So the 09-15 entry's attribution of that gap to the online bin limit is unsupported.
 - Scoring Group MSP as log min(P_A, P_B) would fix this, since it ranks identically in exact arithmetic. So would log-spaced online bins.
 
 **Table A — single-class splits at δ = 0.05.** The rows are every class that beats flat on some set, plus {vegetation}.
@@ -599,8 +600,8 @@ The first run caught two defects before these checks passed: the u histograms we
 | Test + Cetran | gate | 4.07 | 0.078 | 49.5 | 12.4 | 7.1e-7 | 34.0 | +10.1 |
 | Test + Cetran | truck | 9.42 | 0.260 | 40.4 | 8.6 | 4.6e-6 | 47.6 | +4.0 |
 | Test + Cetran | perimeter-barrier | 32.3 | 2.94 | 17.1 | 2.6 | 4.8e-5 | 37.4 | +1.2 |
-| Test + Cetran | bus | 1.00 | 0.079 | 19.0 | 2.96 | 4.8e-7 | 53.9 | −7.0 |
-| Test + Cetran | vegetation | 36.7 | 11.0 | 5.8 | 0.79 | 2.6e-4 | 70.3 | −35.8 |
+| Test + Cetran | bus | 0.99 | 0.079 | 19.0 | 2.96 | 4.8e-7 | 53.9 | −7.0 |
+| Test + Cetran | vegetation | 36.7 | 11.0 | 5.8 | 0.78 | 2.6e-4 | 70.3 | −35.8 |
 | Test + Cetran | bicycle | 0.86 | 0.061 | 20.8 | 3.3 | 2.7e-9 | 77.3 | −38.8 |
 
 **Table B — Spearman ρ at δ = 0.05**, over the 24 single-class / all 503 splits. Precision and the log OOD/ID ratio rank the splits nearly identically; they differ only through the +0.5 continuity correction.
@@ -665,7 +666,7 @@ The largest |ρ| with improvement over δ:
 
 The question from 09-29: which ID classes do the OOD points look like in the features the classifier reads? And does the best split "put the classes that the OOD objects resemble on one side and everything else on the other", as the 09-15 reading suggested?
 
-*Re-run 2026-10-04 after a sampling fix (`84521b0`).* The kNN bank and the ID queries are now two halves of one shuffled weighted draw. Before, the queries took the low-weight leftovers of the draw, which inflated the ID feature-divided shares by about 1 point. No conclusion changed. Seeds 1 and 2 were added as a noise check.
+*Re-run 2026-10-04 after a sampling fix (`84521b0`).* The kNN bank and the ID queries are now two halves of one shuffled weighted draw. Before, the queries took the low-weight leftovers of the draw, which inflated the ID feature-divided shares by about 0.5 point on Test (0.18–0.76 over seeds 0–2) and not measurably on the other sets. No conclusion changed. Seeds 1 and 2 were added as a noise check.
 
 **Features.** `pe_features` is the 256-d per-point input of the semantic classifier (`sem_preds = pe_features @ sem_queriesᵀ`, bias-free). "Appearance" is `pe_features` minus the positional embedding added just before it. `tools/extract_point_features.py` captures both by wrapping `_P3FormerHead.init_inputs` on the model instance.
 - Per frame it keeps up to 64 ID points per class and 512 OOD points, each weighted to its (frame, class) stratum.
@@ -729,7 +730,7 @@ python tools/plot_feature_tsne.py [--space appearance]
 
 **Seed noise** (seeds 0–2, k = 10, full / appearance):
 - ρ(r_OOD, improvement) spans 0.73–0.76 / 0.90–0.92 on Test, 0.58–0.61 / 0.79–0.81 on Test + Cetran, and 0.29–0.34 / 0.43–0.53 on Cetran's own bank.
-- The contrast moves most, by up to 0.11.
+- The contrast moves most, by up to 0.12.
 - The split-level E_A and log-ratio ρ move by at most 0.03.
 - The top three classes are the same for every seed.
 
@@ -771,7 +772,7 @@ python tools/plot_feature_tsne.py [--space appearance]
   - On Test + Cetran: building, gate and perimeter-barrier (19 / 17 / 13 %).
   - On Cetran against the full bank: gate leads (29 %), then perimeter-barrier and person (16 / 12 %). Truck is fifth (5.1 %), with a contrast of 28.
 
-  The resemblance is spread: the top class takes 19–32 % of the neighbours, and the top three between half and 70 %.
+  The resemblance is spread: the top class takes 19–31 % of the neighbours, and the top three about half to 70 %.
 - **At the class level, resemblance matches the winning splits, with one exception.**
   - On Test, the three most-resembled classes are exactly the three positive single-class splits besides overhead-bridge.
   - Over the classes, ρ(r_OOD, improvement) is 0.76 on Test, 0.58 on Test + Cetran and 0.61 on Cetran with the full bank. It is only 0.34 over Cetran's own 14 measured classes, which lack truck and gate.
@@ -788,7 +789,7 @@ python tools/plot_feature_tsne.py [--space appearance]
 - **k = 50.** The r_OOD ranking barely moves: its rank ρ with k = 10 is 0.955–0.991.
   - The top three classes are the same on Test and Test + Cetran in both spaces, and on Cetran's own bank in the full space.
   - In Cetran's appearance space the third class changes, from building to other-barrier.
-  - The headline ρ of Tables B and C move by at most 0.08, about the size of the seed noise.
+  - The headline ρ of Tables B and C move by at most 0.08. At the class level that is about the seed noise; at the split level it is up to twice the noise.
 - **t-SNE** (`tsne_{full,appearance}`; 300 ID points per class and 1,000 OOD points per set). This view is qualitative: t-SNE keeps neighbourhoods, not distances.
   - In the appearance space, the ID classes form clean clusters. The OOD points gather in a region of their own, which borders building, window, perimeter-barrier, gate and other-barrier on Test and Test + Cetran, and perimeter-barrier, other-barrier and person on Cetran. This is the kNN picture of Table A.
   - In the full space, position splits every class into several clusters, and the OOD points spread among them, mostly next to the barriers, building and window. On Cetran, the Stop points form small tight clusters of their own.
@@ -796,4 +797,4 @@ python tools/plot_feature_tsne.py [--space appearance]
   - The test is correlational only, over splits selected on the evaluation data.
   - The kNN reads neighbourhoods, while the classifier is linear on the same features, and overhead-bridge shows the two can disagree.
   - Cetran's own-bank numbers cover only its 14 measured classes.
-  - Differences in ρ smaller than the seed noise (up to 0.1 at the class level, 0.03 at the split level) are not meaningful.
+  - Differences in ρ smaller than the seed noise (up to 0.12 at the class level, 0.03 at the split level) are not meaningful.
