@@ -2,6 +2,7 @@
 
 Date: 2026-09-29
 Status: approved (2026-09-30); plan: `docs/superpowers/plans/2026-09-30-divided-mass-resemblance.md`
+Amended 2026-10-04 to match the implementation, with no number changed: divided means m ≥ δ and uncertain means u ≥ δ (the δ are exact bin edges); the log ratio adds 0.5 to every count.
 Branch: `ood-baselines/grouping`
 
 ## Goal
@@ -33,7 +34,7 @@ apart from completing the 24 single-class splits, no new split is built or score
   single-class splits only {overhead-bridge} (+7.0 / +34.8 / +27.4 on Cetran / Test /
   Test + Cetran) and {gate} (+17.5 / +6.6 / +10.1) are robust.
 - **Mechanical link.** For a two-group split, m = min(P_A, P_B) equals Group MSP + 1.
-  "Divided at δ" (m > δ, i.e. δ < P_A < 1 − δ) is therefore the Group MSP detector at
+  "Divided at δ" (m ≥ δ, i.e. δ ≤ P_A ≤ 1 − δ) is therefore the Group MSP detector at
   threshold δ − 1: the OOD divided share is its TPR and the ID divided share its FPR. One δ
   gives one ROC operating point, and sweeping δ from 0.5 to 0 traces the whole curve, so a
   correlation between divided mass and ΔAUROC is partly true by construction. The
@@ -94,11 +95,11 @@ Per valid point, from the float16 logits upcast to float32:
 
 Per split, set and δ:
 
-- **OOD / ID divided %**: the share of OOD / ID points with m > δ, plus the counts.
+- **OOD / ID divided %**: the share of OOD / ID points with m ≥ δ, plus the counts.
 - **Divided precision**: the OOD divided count / (OOD + ID divided count). It uses
   absolute counts, since ID points outnumber OOD points 33× on Cetran and 63× on Test.
 - **Retention vs flat**: OOD divided / OOD uncertain and ID divided / ID uncertain, where
-  uncertain means u > δ. Their ratio is the **selectivity**; above 1, the split removes
+  uncertain means u ≥ δ. Their ratio is the **selectivity**; above 1, the split removes
   relatively more ID uncertainty than OOD uncertainty.
 - **δ95**: the largest bin edge at which ≥ 95% of the OOD points are divided, and the ID
   divided % there (≈ the FPR@95 of Group MSP). Flat MSP gets the same (u95).
@@ -111,7 +112,7 @@ recomputed with those three included.
 
 **Correlations.** Spearman ρ of each statistic at each δ against ΔAUROC, ΔAP, ΔFPR@95
 (Group MSP − MSP) and improvement. The statistics are OOD divided %, ID divided %, the log
-OOD/ID divided ratio (with +0.5 added to zero counts) and divided precision. ρ is computed
+OOD/ID divided ratio (with +0.5 added to every count) and divided precision. ρ is computed
 per set, over the 24 single-class splits and over all 503 splits.
 
 **Checks.** These go to `summary.md`, where a check beyond tolerance shows as FAIL and is

@@ -61,7 +61,8 @@ Numbers are AUROC / AP / FPR@95 in %. The dates in brackets are the `DOCs.md` en
   - 33 splits beat flat on all three sets.
 - **Feature samples and OOD resemblance** [09-30]:
   - `pe_features` samples of Cetran (1.25 M) and test (3.0 M), on `/mnt/sandisk` and symlinked as `features_{cetran,test}`;
-  - the kNN resemblance per class and per split, the literal placement test, a cross-set bank and a t-SNE view.
+  - the kNN resemblance per class and per split, the literal placement test, a cross-set bank and a t-SNE view;
+  - re-run on 2026-10-04 after a sampling fix (the bank and the ID queries come from one shuffled weighted draw), with seeds 0–2.
 
 ### Current status
 
@@ -72,8 +73,8 @@ Numbers are AUROC / AP / FPR@95 in %. The dates in brackets are the `DOCs.md` en
 | Six-group hierarchy ablation | Run on Cetran only. The winner `p_v_hgcno` (96.00 / 47.23 / 18.42, against 90.42 / 28.27 / 32.32 for flat MSP) **does not transfer**. On test its Group MSP is 87.21 / 17.23 / 68.02, against 86.26 / 13.76 / 51.15 for flat MSP. |
 | Bipartition sweep, Group family | Done on all three splits; the outputs are in `work_dirs/p3former_2xb1_3x_dso_ood_dump/bipartitions{,_test,_test_cetran}/`. Best on Cetran: `s1.3.17` {bicycle, truck, gate}, 96.84 / 54.34 / 17.13. Best on test and on test + Cetran: `s16` {overhead-bridge}, 94.04 / 40.45 / 28.52 on test + Cetran, against 87.76 / 18.06 / 45.76 for flat MSP. 32 splits beat flat on both Cetran and test. With the 24 single-class splits added, 33 beat flat on all three sets. The Cetran~test rank correlation of the improvement is only +0.61. **None is confirmed online yet.** |
 | Bipartition sweep, GN family | Offline GN MSP and GN Entropy are invalid, because those scores pile up at an interior value that the bins don't resolve. They are not ranked. Fixing this needs interior-adaptive bins or online runs. |
-| Divided mass | Done on all three sets, in `work_dirs/p3former_2xb1_3x_dso_ood_dump/divided_mass/`. Divided precision, the OOD share of the points with mass on both sides, predicts the improvement: ρ 0.72–0.74 over all splits at δ = 0.05, and 0.79–0.84 at δ = 0.3. FPR@95 equals the ID divided share at δ95. The implemented float32 Group MSP ties below m ≈ 6e-8, so its FPR@95 is unreliable on 21 / 50 / 43 splits; the tool reports exact values next to it. |
-| OOD resemblance | Done: `resemblance/` (k = 10), `resemblance_k50/` and `resemblance_xref/` (the Test + Cetran bank). The OOD points resemble building, perimeter-barrier and gate. The class-level ρ(r_OOD, improvement) is 0.76 on test, and 0.91 without the positional embedding. The best splits cut through the OOD neighbourhoods rather than grouping the resembled classes. |
+| Divided mass | Done on all three sets, in `work_dirs/p3former_2xb1_3x_dso_ood_dump/divided_mass/`. Divided precision, the OOD share of the points with mass on both sides, predicts the improvement: ρ 0.72–0.74 over all splits at δ = 0.05, and 0.79–0.84 at δ = 0.3. The exact FPR@95 equals the ID divided share at δ95. The implemented float32 Group MSP ties below m ≈ 6e-8, and `test.py`'s 2^20 equal-width bins tie below m ≈ 4.8e-7. Its FPR@95 is therefore unreliable on 21 / 50 / 43 splits; the tool reports exact values next to it. |
+| OOD resemblance | Done: `resemblance/` (k = 10), `resemblance_k50/` and `resemblance_xref/` (the Test + Cetran bank). Re-run on 2026-10-04 after a sampling fix, with seeds 0–2. The OOD points resemble building, perimeter-barrier and gate. The class-level ρ(r_OOD, improvement) is 0.76 on test, and 0.92 without the positional embedding (seed spread ≈ 0.03). Grouping the resembled classes gets mixed support; the cut-through log ratio predicts on every set (ρ 0.48–0.70). |
 | Collaborator branch | `origin/duy/ood-baselines` forks from the pre-split history at `90af8ea`, whose counterpart on this branch is `749328a`. It adds `tools/ood_distance.py` (Mahalanobis feature-distance OOD plus a 203-partition sweep, 2026-09-07). It is not merged, and it lacks everything after that commit. |
 
 ### Findings: why some two-group splits beat the flat scores (2026-09-30)
@@ -81,16 +82,16 @@ Numbers are AUROC / AP / FPR@95 in %. The dates in brackets are the `DOCs.md` en
 The full tables and commands are in the two `DOCs.md` entries of 2026-09-30. The spec is `docs/superpowers/specs/2026-09-29-divided-mass-resemblance-design.md`.
 
 - **Mechanism.** Group MSP flags only the points whose mass is divided across the split. A split beats flat when it keeps far more of flat MSP's uncertain OOD points than of its uncertain ID points. Divided precision is the best single predictor.
-- **FPR@95 is set by depth.** It equals the ID divided share at δ95, the depth at which 95 % of the OOD points are divided. {bicycle} on test looks clean at δ = 0.05 but has δ95 ≈ 1e-9, so it scores −40.1.
-- **Why Cetran's winners do not transfer.** Truck, gate, overhead-bridge and bicycle have no ID point in Cetran.
+- **FPR@95 is set by depth.** The exact FPR@95 equals the ID divided share at δ95, the depth at which 95 % of the OOD points are divided. {bicycle} on test looks clean at δ = 0.05 but has δ95 ≈ 1e-9, so it scores −40.1.
+- **Why Cetran's winners do not transfer: the OOD population shifts.** Test's OOD points lean far less toward truck, gate and bicycle (truck 15.6 → 6.4 % of the OOD points divided), while the ID divided share of these classes stays tiny on both sets. The ID:OOD ratio also doubles. Truck and bicycle fail on test; gate weakens but stays robust, and overhead-bridge becomes the best split.
 - **Resemblance.** The OOD points look like structures: building, perimeter-barrier and gate.
   - Resemblance predicts the single-class winners.
   - Overhead-bridge is the exception: the kNN sees it only without the positional embedding.
-  - The literal hypothesis, grouping the resembled classes on one side, is not supported. The best splits cut through the OOD neighbourhoods (the log feature-divided ratio has ρ 0.50–0.70 on every set).
+  - The literal hypothesis, grouping the resembled classes on one side, gets mixed support. On test it is about as good as separating them, on Cetran it is worse, and lumping them with everything else is the worst placement. The cut-through log feature-divided ratio is the most consistent predictor (ρ 0.48–0.70 on every set).
 - **Open.**
   - Confirm the robust splits online (`class_groups_variants`) on data they were not selected on.
-  - Decide whether `ood_scores.py` should compute Group MSP as min(P_A, P_B) in float64, so that ill-conditioned splits rank exactly.
-  - Test divided precision as a sweep-free selector: pick a split on one set and check how it transfers.
+  - Before that, fix the online resolution. Either score Group MSP as log min(P_A, P_B), which is monotone in m and survives float32 storage and equal-width bins, or give `evaluation/functional/ood_eval.py` log-spaced bins. Until then, {gate} on test (δ95 = 4.0e-7) cannot be confirmed online.
+  - Divided precision is a cheaper proxy, not a label-free selector: it needs the OOD labels of the set it is computed on. Test whether a split picked by it on one set transfers to another.
 
 ### Key decisions and how they were handled
 

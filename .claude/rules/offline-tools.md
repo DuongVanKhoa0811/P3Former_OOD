@@ -20,7 +20,8 @@ These tools read test.py logs, the logit dumps, or the feature samples. Only `ex
 - `extract_point_features.py CONFIG CKPT --ann PKL --out-dir DIR [--check-dump LOGITS_DIR]`: runs the model once on a GPU (~25 GB) and saves weighted per-frame samples of `pe_features`, the semantic classifier's input, together with the positional embedding.
   - Per frame it keeps up to 64 ID points per class and 512 OOD points.
   - It refuses a non-empty `--out-dir`.
-  - `--check-dump` verifies the recomputed logits against a logit dump.
+  - Every frame checks that the captured features reproduce the logits (`feat @ W^T`).
+  - `--check-dump` also compares the sampled points' logits, labels and OOD flags with a logit dump.
   - Large outputs go on `/mnt/sandisk` (`features_{cetran,test}`).
 - `ood_class_resemblance.py [--k 10] [--reference SET] [--chunk N] [--out-dir DIR]`: kNN resemblance of the OOD samples to each ID class, plus per-split statistics. It writes `resemblance/` (`profile_*`, `splits_*`, `placement.tsv`, `rho.tsv` and `summary.md`).
   - Per class: r_OOD, r_ID and the contrast.
