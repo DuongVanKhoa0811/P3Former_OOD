@@ -36,8 +36,11 @@ def _fitted(dim=3, seed=0):
 def test_log_density_matches_multivariate_normal():
     gmm = _fitted()
     z = torch.randn(20, 3, dtype=torch.float64) * 4
+    eye = torch.eye(3, dtype=torch.float64)
+    # the Gaussians are the raw covariances plus the diagonal finalize added
     mvn = torch.distributions.MultivariateNormal(
-        gmm['means'], covariance_matrix=gmm['covs'])
+        gmm['means'],
+        covariance_matrix=gmm['covs'] + gmm['jitter'][:, None, None] * eye)
     expected = torch.logsumexp(
         mvn.log_prob(z[:, None, :]) + gmm['log_prior'], dim=1)
     assert torch.allclose(log_density(z, gmm, chunk=7), expected, atol=1e-9)

@@ -9,9 +9,17 @@ of state for 24 classes x 256 dimensions.
 
 ``finalize`` turns the sums into, per class:
 - the mean, and the N-1 covariance (``torch.cov``'s convention);
-- the precision Cholesky factor P = L^-T, found with OCCUQ's jitter search
-  (per class here);
+- the precision Cholesky factor P = L^-T of the covariance plus one
+  diagonal shared by all classes: a ridge of 1e-6 x the mean pooled ID
+  variance, plus OCCUQ's jitter, searched once for all classes;
 - its log-determinant and the log class prior.
+
+The shared ridge exists because of dead feature dimensions. In the base
+checkpoint, ``pe_features`` dim 190 is always 0 (the ``pe_conv`` LayerNorm
+gives it gamma 0.0291 and beta -0.3372 before a ReLU), so every class
+covariance is singular. A jitter alone would be 2.2e-308, which makes P
+~6.7e153: +inf in float32, so the density is NaN. Per-class jitters would
+add class-dependent offsets of -0.5 log(jitter_c), up to 354 nats.
 
 Pure functions; ``tools/fit_occuq_gmm.py`` runs the model and feeds them.
 """
@@ -94,28 +102,44 @@ class GaussianStats:
 
 
 def cholesky_with_jitter(cov: torch.Tensor) -> Tuple[torch.Tensor, float]:
-    """Lower Cholesky factor of ``cov + jitter * I`` (float64), with the
-    first jitter of ``JITTERS`` that makes it succeed.
+    """Lower Cholesky factors of ``cov + jitter * I`` (float64), with the
+    first jitter of ``JITTERS`` for which every matrix factors.
 
     Args:
-        cov: [D, D] float64 tensor on CPU. cuSOLVER-backed ops (cholesky,
-            inverse, eigh) fail on sm_89 GPUs with torch 1.10.1+cu111, so
-            call finalize to move sums to CPU before passing here.
+        cov: [D, D] or a batch [..., D, D], float64 on CPU. One jitter is
+            shared by the whole batch, as in OCCUQ. cuSOLVER-backed ops
+            (cholesky, inverse, eigh) fail on sm_89 GPUs with torch
+            1.10.1+cu111, so call finalize to move sums to CPU before
+            passing here.
 
     Returns:
-        (chol, jitter): Cholesky factor and the jitter used, both on CPU.
+        (chol, jitter): the Cholesky factors, shaped like ``cov``, and the
+        jitter used, both on CPU.
     """
-    eye = torch.eye(cov.shape[0], dtype=cov.dtype, device=cov.device)
+    eye = torch.eye(cov.shape[-1], dtype=cov.dtype, device=cov.device)
     for jitter in JITTERS:
         chol, info = torch.linalg.cholesky_ex(cov + jitter * eye)
-        if int(info) == 0 and bool(torch.isfinite(chol).all()):
+        if bool((info == 0).all()) and bool(torch.isfinite(chol).all()):
             return chol, jitter
     raise ValueError('the covariance is not positive definite even with '
                      f'jitter {JITTERS[-1]}')
 
 
-def finalize(stats: GaussianStats, min_count: int) -> Dict[str, torch.Tensor]:
+def finalize(stats: GaussianStats, min_count: int,
+             ridge_rel: float = 1e-6) -> Dict[str, torch.Tensor]:
     """Turn the running sums into Gaussians, all float64 on CPU.
+
+    Regularisation: every class covariance gets the same diagonal,
+    (ridge + jitter) I.
+    - ridge = ridge_rel x the mean over dimensions of the pooled ID
+      variance, the variance of all classes' voxels together;
+    - jitter is the first value of ``JITTERS`` for which every class
+      factors: OCCUQ's jitter search, with one jitter for all classes.
+    A dead feature dimension, 0 in every class, then has variance ridge in
+    every class. It adds the same constant to every class's log-density, and
+    the float32 precision factors stay finite. A jitter alone (2.2e-308)
+    would overflow float32, and per-class jitters would add class-dependent
+    offsets of up to 354 nats.
 
     Sums are moved to CPU before factorization because cuSOLVER-backed ops
     (cholesky, inverse, eigh) fail on sm_89 GPUs with torch 1.10.1+cu111.
@@ -124,15 +148,21 @@ def finalize(stats: GaussianStats, min_count: int) -> Dict[str, torch.Tensor]:
     Args:
         stats: GaussianStats with count, sum, outer (may be on any device).
         min_count: minimum number of voxels per class.
+        ridge_rel: the ridge relative to the mean pooled variance.
 
     Returns a dict with:
     - means [C, D];
-    - covs [C, D, D], with the N-1 correction and no jitter;
-    - prec_chol [C, D, D]: P = L^-T of cov + jitter, so (z - mu) P has
+    - covs [C, D, D], with the N-1 correction and no regularisation;
+    - prec_chol [C, D, D]: P = L^-T of covs + jitter I, so (z - mu) P has
       identity covariance;
-    - log_det_prec [C]: sum log diag P, which is -0.5 log det Sigma;
+    - log_det_prec [C]: sum log diag P, which is -0.5 log det(covs +
+      jitter I);
     - log_prior [C]: log(n_c / sum n);
-    - counts [C] and jitter [C].
+    - counts [C];
+    - jitter [C]: the whole diagonal added, ridge + the shared jitter, the
+      same for every class;
+    - ridge: 0-d;
+    - pooled_var [D]: the pooled ID variance per dimension (N-1).
 
     All tensors are float64 on CPU.
     """
@@ -149,20 +179,28 @@ def finalize(stats: GaussianStats, min_count: int) -> Dict[str, torch.Tensor]:
     covs = (outer_cpu - n[:, None, None] * means[:, :, None] *
             means[:, None, :]) / (n[:, None, None] - 1)
     covs = 0.5 * (covs + covs.transpose(1, 2))
-    prec_chol, log_det_prec, jitters = [], [], []
-    for c in range(len(n)):
-        chol, jitter = cholesky_with_jitter(covs[c])
-        eye = torch.eye(chol.shape[0], dtype=chol.dtype, device=chol.device)
-        chol_inv = torch.triangular_solve(eye, chol, upper=False).solution
-        prec = chol_inv.t().contiguous()
-        prec_chol.append(prec)
-        log_det_prec.append(torch.log(torch.diagonal(prec)).sum())
-        jitters.append(jitter)
+    total = n.sum()
+    pooled_mean = sum_cpu.sum(dim=0) / total
+    pooled_var = (torch.diagonal(outer_cpu, dim1=1, dim2=2).sum(dim=0) -
+                  total * pooled_mean**2) / (total - 1)
+    mean_var = pooled_var.mean()
+    if not float(mean_var) > 0:
+        raise ValueError(f'the mean pooled ID variance is {float(mean_var)}: '
+                         'the features are constant (or not finite)')
+    ridge = ridge_rel * mean_var
+    eye = torch.eye(covs.shape[-1], dtype=covs.dtype)
+    chol, jitter = cholesky_with_jitter(covs + ridge * eye)
+    chol_inv = torch.triangular_solve(eye.expand_as(chol), chol,
+                                      upper=False).solution
+    prec_chol = chol_inv.transpose(1, 2).contiguous()
     return dict(
         means=means,
         covs=covs,
-        prec_chol=torch.stack(prec_chol),
-        log_det_prec=torch.stack(log_det_prec),
-        log_prior=torch.log(n / n.sum()),
+        prec_chol=prec_chol,
+        log_det_prec=torch.log(torch.diagonal(prec_chol, dim1=1,
+                                              dim2=2)).sum(dim=1),
+        log_prior=torch.log(n / total),
         counts=n.clone(),
-        jitter=torch.tensor(jitters, dtype=torch.float64))
+        jitter=(ridge + jitter).repeat(len(n)),
+        ridge=ridge,
+        pooled_var=pooled_var)

@@ -3,6 +3,7 @@
 Run from the repo root:
     /home/khoadv/miniconda3/envs/p3former/bin/python tests/test_fit_occuq_gmm.py
 """
+import math
 import os
 import sys
 
@@ -10,6 +11,7 @@ import torch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from p3former.utils.gmm_density import GMM_KEYS, log_density  # noqa: E402
 from p3former.utils.gmm_fit import (JITTERS, GaussianStats,  # noqa: E402
                                     cholesky_with_jitter, finalize,
                                     voxel_majority_labels)
@@ -30,21 +32,81 @@ def test_running_sums_match_torch_cov():
         stats.update(feats[chunk], labels[chunk], ignore_index=3)
     gmm = finalize(stats, min_count=10)
     eye = torch.eye(4, dtype=torch.float64)
+    # the pooled ID variance per dimension, over all classes together
+    pooled = torch.var(feats[labels != 3].double(), dim=0)
+    assert torch.allclose(gmm['pooled_var'], pooled, atol=1e-10)
+    assert gmm['ridge'].dim() == 0 and gmm['ridge'].dtype == torch.float64
+    assert gmm['ridge'] == 1e-6 * gmm['pooled_var'].mean()
+    # one diagonal for every class: the ridge alone, as no jitter is needed
+    assert (gmm['jitter'] == gmm['jitter'][0]).all()
+    assert (gmm['jitter'] == gmm['ridge']).all()
     for c in range(3):
         zc = feats[labels == c].double()
         assert torch.allclose(gmm['means'][c], zc.mean(0), atol=1e-10)
+        # covs stays the raw covariance
         assert torch.allclose(gmm['covs'][c], torch.cov(zc.t()), atol=1e-10)
         assert int(gmm['counts'][c]) == len(zc)
-        prec = gmm['prec_chol'][c]  # P = L^-T whitens the class
-        assert torch.allclose(prec.t() @ gmm['covs'][c] @ prec, eye,
-                              atol=1e-8)
+        regularised = gmm['covs'][c] + gmm['jitter'][c] * eye
+        prec = gmm['prec_chol'][c]  # P = L^-T whitens the regularised class
+        assert torch.allclose(prec.t() @ regularised @ prec, eye, atol=1e-8)
         assert torch.isclose(gmm['log_det_prec'][c],
-                             -0.5 * torch.logdet(gmm['covs'][c]), atol=1e-10)
+                             -0.5 * torch.logdet(regularised), atol=1e-10)
     counts = torch.tensor([(labels == c).sum() for c in range(3)],
                           dtype=torch.float64)
     assert torch.allclose(gmm['log_prior'], torch.log(counts / counts.sum()))
-    assert (gmm['jitter'] == 0).all()
     print('PASS test_running_sums_match_torch_cov')
+
+
+def test_dead_dimension_adds_one_constant_to_every_class():
+    """A feature that is 0 in every class, like pe_features dim 190 of the
+    base checkpoint, makes every class covariance singular."""
+    feats, labels = _data(dim=5)
+    feats[:, 2] = 0.0  # the dead dimension
+    stats = GaussianStats(3, 5)
+    stats.update(feats, labels, ignore_index=3)
+    gmm = finalize(stats, min_count=10)
+    assert gmm['pooled_var'][2] == 0 and int((gmm['pooled_var'] > 0).sum()) == 4
+    assert (gmm['jitter'] == gmm['jitter'][0]).all()
+    assert gmm['jitter'][0] == gmm['ridge'] and gmm['ridge'] > 0
+    for key in GMM_KEYS:  # what the density score casts to float32
+        assert torch.isfinite(gmm[key].float()).all(), key
+    # log N_c of a point with 0 in the dead dimension = log N_c of the other
+    # four dimensions + one constant, the same for every class
+    g = torch.Generator().manual_seed(1)
+    z = torch.randn(50, 5, generator=g, dtype=torch.float64) * 3
+    z[:, 2] = 0.0
+    keep = [0, 1, 3, 4]
+    const = 0.5 * 5 * math.log(2 * math.pi)
+    offsets = []
+    for c in range(3):
+        y = (z - gmm['means'][c]) @ gmm['prec_chol'][c]
+        log_n = gmm['log_det_prec'][c] - const - 0.5 * y.pow(2).sum(1)
+        reduced = torch.distributions.MultivariateNormal(
+            gmm['means'][c, keep],
+            covariance_matrix=gmm['covs'][c][keep][:, keep] +
+            gmm['jitter'][c] * torch.eye(4, dtype=torch.float64))
+        offsets.append(log_n - reduced.log_prob(z[:, keep]))
+    offsets = torch.stack(offsets)  # [classes, points]
+    shared = -0.5 * torch.log(2 * math.pi * gmm['jitter'][0])
+    assert torch.allclose(offsets, shared.expand_as(offsets), atol=1e-8)
+    # the float32 log-density, NaN under a per-class jitter search, is finite
+    gmm32 = {key: gmm[key].float() for key in GMM_KEYS}
+    fast = log_density(z.float(), gmm32)
+    assert torch.isfinite(fast).all()
+    assert torch.allclose(fast.double(), log_density(z, gmm), atol=1e-3)
+    print('PASS test_dead_dimension_adds_one_constant_to_every_class')
+
+
+def test_constant_features_are_rejected():
+    stats = GaussianStats(2, 3)
+    stats.update(torch.ones(40, 3), torch.arange(40) % 2, ignore_index=2)
+    try:
+        finalize(stats, min_count=10)
+    except ValueError as err:
+        assert 'pooled' in str(err), str(err)
+    else:
+        raise AssertionError('constant features were accepted')
+    print('PASS test_constant_features_are_rejected')
 
 
 def test_ignore_label_never_reaches_the_sums():
@@ -114,6 +176,23 @@ def test_jitter_is_smallest_working_value():
     print('PASS test_jitter_is_smallest_working_value')
 
 
+def test_batched_jitter_is_the_first_that_works_for_all():
+    eye = torch.eye(3, dtype=torch.float64)
+    covs = torch.stack([
+        eye,
+        torch.diag(torch.tensor([1.0, 1.0, -5e-5], dtype=torch.float64)),
+        torch.diag(torch.tensor([1.0, 1.0, -5e-3], dtype=torch.float64)),
+    ])
+    for cov, alone in zip(covs, (0.0, 1e-4, 1e-2)):
+        assert cholesky_with_jitter(cov)[1] == alone
+    chol, jitter = cholesky_with_jitter(covs)
+    assert jitter == 1e-2, jitter  # one value, the first that works for all
+    assert chol.shape == (3, 3, 3)
+    assert torch.allclose(chol @ chol.transpose(1, 2), covs + jitter * eye,
+                          atol=1e-12)
+    print('PASS test_batched_jitter_is_the_first_that_works_for_all')
+
+
 def test_min_count_error_names_the_class():
     feats, labels = _data(n=60)
     stats = GaussianStats(3, 4)
@@ -153,12 +232,15 @@ def test_finalize_accepts_gpu_sums():
 
 if __name__ == '__main__':
     test_running_sums_match_torch_cov()
+    test_dead_dimension_adds_one_constant_to_every_class()
+    test_constant_features_are_rejected()
     test_ignore_label_never_reaches_the_sums()
     test_out_of_range_label_is_rejected()
     test_majority_vote()
     test_majority_vote_rejects_empty_voxels_and_length_mismatch()
     test_jitter_zero_for_positive_definite()
     test_jitter_is_smallest_working_value()
+    test_batched_jitter_is_the_first_that_works_for_all()
     test_min_count_error_names_the_class()
     test_finalize_accepts_gpu_sums()
     print('ALL TESTS PASSED')
