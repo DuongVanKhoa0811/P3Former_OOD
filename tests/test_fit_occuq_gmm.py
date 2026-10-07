@@ -127,6 +127,30 @@ def test_min_count_error_names_the_class():
     print('PASS test_min_count_error_names_the_class')
 
 
+def test_finalize_accepts_gpu_sums():
+    if not torch.cuda.is_available():
+        print('SKIP test_finalize_accepts_gpu_sums (no CUDA)')
+        return
+    feats, labels = _data()
+    # Accumulate on GPU
+    stats_gpu = GaussianStats(num_classes=3, dim=4, device='cuda')
+    for chunk in torch.split(torch.randperm(len(labels)), 97):
+        stats_gpu.update(feats[chunk].cuda(), labels[chunk], ignore_index=3)
+    gmm_gpu = finalize(stats_gpu, min_count=10)
+    # Accumulate on CPU
+    stats_cpu = GaussianStats(num_classes=3, dim=4)
+    for chunk in torch.split(torch.randperm(len(labels)), 97):
+        stats_cpu.update(feats[chunk], labels[chunk], ignore_index=3)
+    gmm_cpu = finalize(stats_cpu, min_count=10)
+    # GPU-path result must be on CPU and match CPU-path
+    for key in gmm_gpu.keys():
+        assert gmm_gpu[key].device.type == 'cpu', \
+            f'{key} is on {gmm_gpu[key].device}, expected cpu'
+        assert torch.allclose(gmm_gpu[key], gmm_cpu[key], atol=1e-9), \
+            f'{key} differs: GPU {gmm_gpu[key].shape} vs CPU {gmm_cpu[key].shape}'
+    print('PASS test_finalize_accepts_gpu_sums')
+
+
 if __name__ == '__main__':
     test_running_sums_match_torch_cov()
     test_ignore_label_never_reaches_the_sums()
@@ -136,4 +160,5 @@ if __name__ == '__main__':
     test_jitter_zero_for_positive_definite()
     test_jitter_is_smallest_working_value()
     test_min_count_error_names_the_class()
+    test_finalize_accepts_gpu_sums()
     print('ALL TESTS PASSED')

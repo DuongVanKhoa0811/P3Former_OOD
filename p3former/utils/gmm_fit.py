@@ -95,7 +95,16 @@ class GaussianStats:
 
 def cholesky_with_jitter(cov: torch.Tensor) -> Tuple[torch.Tensor, float]:
     """Lower Cholesky factor of ``cov + jitter * I`` (float64), with the
-    first jitter of ``JITTERS`` that makes it succeed."""
+    first jitter of ``JITTERS`` that makes it succeed.
+
+    Args:
+        cov: [D, D] float64 tensor on CPU. cuSOLVER-backed ops (cholesky,
+            inverse, eigh) fail on sm_89 GPUs with torch 1.10.1+cu111, so
+            call finalize to move sums to CPU before passing here.
+
+    Returns:
+        (chol, jitter): Cholesky factor and the jitter used, both on CPU.
+    """
     eye = torch.eye(cov.shape[0], dtype=cov.dtype, device=cov.device)
     for jitter in JITTERS:
         chol, info = torch.linalg.cholesky_ex(cov + jitter * eye)
@@ -106,7 +115,15 @@ def cholesky_with_jitter(cov: torch.Tensor) -> Tuple[torch.Tensor, float]:
 
 
 def finalize(stats: GaussianStats, min_count: int) -> Dict[str, torch.Tensor]:
-    """Turn the running sums into Gaussians, all float64.
+    """Turn the running sums into Gaussians, all float64 on CPU.
+
+    Sums are moved to CPU before factorization because cuSOLVER-backed ops
+    (cholesky, inverse, eigh) fail on sm_89 GPUs with torch 1.10.1+cu111.
+    The returned dict is entirely on CPU, regardless of where stats live.
+
+    Args:
+        stats: GaussianStats with count, sum, outer (may be on any device).
+        min_count: minimum number of voxels per class.
 
     Returns a dict with:
     - means [C, D];
@@ -116,16 +133,20 @@ def finalize(stats: GaussianStats, min_count: int) -> Dict[str, torch.Tensor]:
     - log_det_prec [C]: sum log diag P, which is -0.5 log det Sigma;
     - log_prior [C]: log(n_c / sum n);
     - counts [C] and jitter [C].
+
+    All tensors are float64 on CPU.
     """
     if min_count < 2:
         raise ValueError('min_count must be at least 2 (N-1 covariance)')
-    n = stats.count
+    n = stats.count.cpu()
     too_few = [(c, int(n[c])) for c in range(len(n)) if n[c] < min_count]
     if too_few:
         raise ValueError(f'classes with fewer than {min_count} voxels '
                          f'(class, count): {too_few}')
-    means = stats.sum / n[:, None]
-    covs = (stats.outer - n[:, None, None] * means[:, :, None] *
+    sum_cpu = stats.sum.cpu()
+    outer_cpu = stats.outer.cpu()
+    means = sum_cpu / n[:, None]
+    covs = (outer_cpu - n[:, None, None] * means[:, :, None] *
             means[:, None, :]) / (n[:, None, None] - 1)
     covs = 0.5 * (covs + covs.transpose(1, 2))
     prec_chol, log_det_prec, jitters = [], [], []
