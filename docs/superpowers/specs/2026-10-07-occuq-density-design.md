@@ -96,28 +96,42 @@ When `occuq_cfg.freeze_base` is set:
 ## Fitting the Gaussians (`tools/fit_occuq_gmm.py`, new)
 
 ```bash
-python tools/fit_occuq_gmm.py CONFIG CKPT --features head|pe --out FILE [--ann dso_infos_train.pkl] [--check N]
+python tools/fit_occuq_gmm.py CONFIG CKPT --features head|pe --out FILE [--ann dso_infos_train.pkl] [--check N] [--from-sums SUMS]
 ```
 
 - **Data.** The training split (8,474 frames) through the config's **test** pipeline, at batch 1, in eval mode. OCCUQ collects its features with training augmentation; here that would mean LaserMix/PolarMix-mixed scenes.
 - **Samples.** One sample per voxel:
   - Feature: `pe_features`, or the output of the OCCUQ head's last block.
   - Label: the majority vote of its points' labels (`pts_semantic_mask` through `point2voxel_map`), with ties going to the lowest class id.
-  - Voxels labelled 24 are skipped. Stop and Others map to 24, so the Gaussians never see OOD points.
+  - Voxels labelled 24 are skipped. Stop and Others map to 24, so a voxel where they are the majority never enters the sums.
+  - About 1.4% of Stop and Others points (measured over 8 training frames) lie in voxels whose majority label is an ID class, so those voxels enter the sums. Evaluation scores those voxels the same way: each point takes its voxel's score.
   - There is no "unoccupied" component, so there are 24 components in total.
 - **Statistics.** Per class c in 0–23, running sums on the GPU: the count n_c, Σz and Σzzᵀ. The features are cast to float64 before the products. Every voxel is used: OCCUQ caps the samples at 200M per class and 100k per class per frame only to bound memory, and running sums make that unnecessary.
 - **Gaussians**, in float64:
   - Mean and covariance: μ_c = Σz / n_c and Σ_c = (Σzzᵀ − n_c μ_c μ_cᵀ) / (n_c − 1), which is `torch.cov`'s N−1 convention.
-  - Jitter, per class: the smallest value from OCCUQ's list (0, 2.2e-308, 1e-308, 1e-307, …, 1e-1) for which `torch.linalg.cholesky(Σ_c + jitter·I)` succeeds. OCCUQ shares one jitter across all classes.
-  - Precision Cholesky factor P_c = L_c^{-T}, computed with `torch.triangular_solve`, because torch 1.10 has no `linalg.solve_triangular`.
+  - Regularization, the same for every class: Σ_c + (ridge + jitter)·I.
+    - ridge = 10⁻⁶ × the mean over dimensions of the pooled ID variance, the per-dimension variance of all classes' voxels together, from the same sums.
+    - jitter: the first value of OCCUQ's list (0, 2.2e-308, 1e-308, 1e-307, …, 1e-1) for which every class's Cholesky factorization succeeds. As in OCCUQ, one jitter serves all classes.
+    - Constant features (a mean pooled variance that is not positive) raise an error.
+  - Why the ridge: the base checkpoint's `pe_features` has a dead dimension.
+    - Channel 190 of the `decode_head.pe_conv.1` LayerNorm has γ = 0.0291 and β = −0.3372. Its ReLU output is positive only when the normalized value exceeds 11.6, against a maximum of √255 = 15.97, so in practice it is always 0, and every class covariance is singular.
+    - A jitter alone would be 2.2e-308. The precision factor would reach ~6.7e153, which is +inf in float32, so the float32 log-density would be NaN.
+    - Per-class jitters would add class-dependent offsets of −½ log jitter_c, up to 354 nats.
+    - With the shared ridge, a dimension that is 0 everywhere adds one constant to every class's log-density, which changes neither the class posteriors nor the ranking of log q. For full-rank features, the ridge changes the covariances by 10⁻⁶ of the mean variance.
+  - Precision Cholesky factor P_c = L_c^{-T}, where L_c is the Cholesky factor of the regularized Σ_c, computed with `torch.triangular_solve`, because torch 1.10 has no `linalg.solve_triangular`.
   - Priors: log π_c = log(n_c / Σ_k n_k), over all voxels. OCCUQ takes them from its capped counts.
 - **Output.**
   - Contents: a `torch.save` of a dict of plain tensors, not a pickled distribution object.
-    - Tensors: `means` [24, 256], `prec_chol` [24, 256, 256], `log_det_prec` [24] (Σ log diag P_c), `log_prior` [24], `counts` and `jitter`.
+    - Tensors: `means` [24, 256], `covs` [24, 256, 256] (raw, unregularized), `prec_chol` [24, 256, 256], `log_det_prec` [24] (Σ log diag P_c), `log_prior` [24] and `counts`.
+    - Regularization: `jitter` [24], the whole diagonal added (ridge + jitter), identical across classes; `ridge`; and `pooled_var` [256].
     - Metadata: `features`, `checkpoint`, `ann_file`, `class_names` and `fingerprint` (see Error handling).
   - The tool refuses to overwrite an existing file.
   - It logs the per-class counts and jitters. With `--features head` it also logs the head's per-class voxel accuracy on the training split (argmax of the first 24 logits), to show that the head learned.
-- **`--check N`.** Re-scores N training frames twice, with the production float32 GPU path and with float64 on the CPU. It fails if log q differs by more than 0.05 nats anywhere.
+  - It also logs the ridge, the shared jitter, the minimum pooled variance, and the number of dimensions whose pooled variance is exactly 0 or below 10⁻¹² of the mean.
+- **Running sums.** Right after the pass, the tool saves the raw sums to `<out stem>.sums.pth` (`gmm_pe.pth` → `gmm_pe.sums.pth`): n_c, Σz and Σzzᵀ in float64, the head's accuracy counters, and the metadata with the fingerprint.
+  - A pass refuses to overwrite an existing sums file.
+  - `--from-sums SUMS` builds the model, refuses sums of other features or with another fingerprint, skips the pass, then finalizes, reports, checks and saves as usual. So a failure after the pass costs no second pass.
+- **`--check N`.** Re-scores N training frames twice, with the production float32 GPU path and with float64 on the CPU. It fails if either log q is non-finite anywhere, or if they differ by more than 0.05 nats anywhere (so a NaN can't pass).
 
 ## Density score (`p3former/utils/gmm_density.py`, new)
 
@@ -215,7 +229,7 @@ The tool only reads logs.
 4. **Fitting.**
    - The test pipeline instead of training augmentation.
    - Every voxel, in float64 running sums, instead of capped float32 samples.
-   - A per-class jitter.
+   - A shared ridge of 10⁻⁶ × the mean pooled ID variance on every class's diagonal, on top of OCCUQ's shared jitter. With the jitter alone, the dead `pe_features` dimension would get a jitter of 2.2e-308 and float32 precision factors of +inf (see Fitting the Gaussians).
    - Priors from all voxels.
    - Voxel labels by majority vote of their points' class labels. With instance masks, P3Former's training targets vote by panoptic segment first and take that segment's class; the two differ only in voxels shared by several segments.
    - No "unoccupied" class.
@@ -233,7 +247,11 @@ Every failure raises an error with a message that says what to do:
     - plus `occuq_head` for `--features head`. Its entries include the spectral-norm `weight_orig`, `weight_u` and `weight_v`.
   - `predict` recomputes it and refuses a file fitted for other weights, for example seed 0's Gaussians with seed 1's head.
 - Non-finite density.
-- Fitting: a class with fewer than 2,560 voxels (10 × 256), a covariance that is still not positive definite at the largest jitter, or an existing output file.
+- Fitting:
+  - a class with fewer than 2,560 voxels (10 × 256), constant features, or a covariance that is still not positive definite at the largest jitter;
+  - non-finite float32 Gaussians: the error names the classes and the regularization;
+  - a non-finite log-density in `--check`, naming the frame;
+  - an existing output file, an existing sums file on a pass, or `--from-sums` sums of other features or weights.
 - Comparison: a missing log, set, split row or seed, or a failed `robust.tsv` consistency check.
 
 ## Verification
@@ -254,8 +272,11 @@ Every failure raises an error with a message that says what to do:
      - running sums over random chunks reproduce `torch.mean` and `torch.cov` of the concatenated data;
      - the majority vote is correct on a hand-built case;
      - label-24 voxels never reach the sums;
-     - the jitter search gives 0 for a positive-definite covariance and the smallest working value for a singular one;
-     - the minimum-count error fires.
+     - the jitter search gives 0 for a positive-definite covariance and the smallest working value for a singular one, and for a batch the first value that works for every matrix;
+     - every class gets the same diagonal, the ridge is 10⁻⁶ × the mean pooled variance, and `prec_chol` whitens the regularized covariance;
+     - a dimension that is 0 in every class adds one constant to every class's log-density, and the float32 tensors and log-density stay finite;
+     - constant features and the minimum-count error fire.
+   - `tests/test_fit_occuq_tool.py`, without a model: `--check` rejects a non-finite log-density on either side and a difference above 0.05 nats; the float32 guard names the class; the report shows the zero-variance dimensions; the sums file round-trips through `finalize`; and, on a fake model, `fit` saves the sums before finalizing, refuses to redo a pass over them, and `--from-sums` reproduces the Gaussian file without a pass.
    - `tests/test_compare_occuq_grouping.py`: row parsing; I and the best single Group score; the verdict rule on toy seed values; the consistency check.
 2. **Smoke run** of each evaluation config on the 5-frame `dso_infos_mini.pkl`: the new keys are present and finite.
 3. **Frozen-path check.** A's first evaluation reproduces the logged PQ (46.50 on test, 46.19 on test + Cetran) and the flat rows exactly.
@@ -271,7 +292,7 @@ Every failure raises an error with a message that says what to do:
 - **Evaluation:** about 5 / 12 / 15 min on Cetran / test / test + Cetran, for each of the 7 models.
 - **Total:** about 28 h of wall-clock time if the runs go back to back.
 - **Memory:** an evaluation needs about 25 GB of GPU memory. The evaluator holds (4 × 6 + 1) bytes per point, about 32 GB on test + Cetran.
-- **Disk:** about 1 GB per run (one checkpoint) plus 12.6 MB per Gaussian file, all on `/mnt/sandisk`.
+- **Disk:** about 1 GB per run (one checkpoint) plus 38 MB per fit (25 MB for the Gaussian file with `covs` and `prec_chol`, 12.6 MB for its sums file), all on `/mnt/sandisk`.
 
 ## Files
 
@@ -282,7 +303,7 @@ New:
 - `tools/fit_occuq_gmm.py`
 - `tools/compare_occuq_grouping.py`
 - `configs/p3former/p3former_2xb1_3x_dso_occuq_{pe,a,c}.py`
-- `tests/test_occuq_head.py`, `tests/test_gmm_density.py`, `tests/test_fit_occuq_gmm.py` and `tests/test_compare_occuq_grouping.py`
+- `tests/test_occuq_head.py`, `tests/test_gmm_density.py`, `tests/test_fit_occuq_gmm.py`, `tests/test_fit_occuq_tool.py` and `tests/test_compare_occuq_grouping.py`
 
 Modified: `p3former/decode_heads/p3former_head.py`, `p3former/segmentors/p3former.py`, `DOCs.md`, and the `.claude/` files listed under Verification.
 

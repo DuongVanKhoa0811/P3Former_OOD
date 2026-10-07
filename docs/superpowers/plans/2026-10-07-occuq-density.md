@@ -35,7 +35,7 @@
   - Minimum 2,560 voxels per class.
   - `--check` tolerance 0.05 nats.
   - `score_chunk` 65,536.
-  - Jitter list `[0, 2.2e-308] + [10**e for e in range(-308, 0)]`, searched per class.
+  - Regularization: every class covariance gets the same diagonal, a ridge of 1e-6 × the mean pooled ID variance plus one jitter shared by all classes: the first of `[0, 2.2e-308] + [10**e for e in range(-308, 0)]` for which every class factors (amended after the final review; see the end of this plan).
 - **Training recipe for A and C:**
   - `load_from` the base checkpoint.
   - AdamW, lr 2e-4, weight decay 0.01, no backbone multiplier, no clipping.
@@ -2660,7 +2660,7 @@ Expected: four symlinks into `/mnt/sandisk/khoadv/occuq/`.
 nvidia-smi --query-gpu=index,memory.used,memory.total --format=csv
 CUDA_VISIBLE_DEVICES=0 /home/khoadv/miniconda3/envs/p3former/bin/python tools/fit_occuq_gmm.py configs/p3former/p3former_2xb1_3x_dso_occuq_pe.py work_dirs/p3former_2xb1_3x_dso/epoch_36.pth --features pe --out work_dirs/p3former_2xb1_3x_dso_occuq_pe/smoke_gmm_pe.pth --limit 20
 ```
-Expected: `20 frames in ... s`. Then either `ValueError: classes with fewer than 2560 voxels (class, count): [...]`, because 20 frames lack the rare classes, or `saved .../smoke_gmm_pe.pth`. Both prove the loop works end to end. Then delete any smoke file: `rm -f work_dirs/p3former_2xb1_3x_dso_occuq_pe/smoke_gmm_pe.pth`.
+Expected: `20 frames in ... s` and `saved the running sums to .../smoke_gmm_pe.sums.pth`. Then either `ValueError: classes with fewer than 2560 voxels (class, count): [...]`, because 20 frames lack the rare classes, or `saved .../smoke_gmm_pe.pth`. Both prove the loop works end to end. Then delete the smoke files: `rm -f work_dirs/p3former_2xb1_3x_dso_occuq_pe/smoke_gmm_pe.pth work_dirs/p3former_2xb1_3x_dso_occuq_pe/smoke_gmm_pe.sums.pth`.
 
 - [ ] **Step 3: Write the run script**
 
@@ -2669,6 +2669,7 @@ cat > /mnt/sandisk/khoadv/occuq/run_variant.sh <<'EOF'
 #!/usr/bin/env bash
 # OCCUQ runs (docs/superpowers/plans/2026-10-07-occuq-density.md).
 # Usage: run_variant.sh pe | run_variant.sh a|c SEED...
+# Never pass --resume to an OCCUQ training run: with CheckpointHook(interval=9) there is no checkpoint before epoch 9, so --resume would train from random weights; rerun the seed instead.
 set -euo pipefail
 cd /home/khoadv/projects/OOD_PanSeg_3D/P3Former_OOD
 PY=/home/khoadv/miniconda3/envs/p3former/bin/python
@@ -2676,23 +2677,34 @@ export PATH=/home/khoadv/miniconda3/envs/p3former/bin:$PATH
 V=$1; shift
 CFG=configs/p3former/p3former_2xb1_3x_dso_occuq_$V.py
 OUT=work_dirs/p3former_2xb1_3x_dso_occuq_$V
-evaluate() {  # evaluate CKPT RUN_DIR OPTION=GMM_FILE
+fit() {  # fit CKPT FEATURES GMM_FILE
+  if [ -f $3 ]; then return 0; fi
+  local SUMS=${3%.pth}.sums.pth  # the pass saves its sums there before finalizing
+  if [ -f $SUMS ]; then  # an earlier fit failed after its pass: finalize the saved sums
+    CUDA_VISIBLE_DEVICES=0 $PY tools/fit_occuq_gmm.py $CFG $1 --features $2 --out $3 --check 5 --from-sums $SUMS
+  else
+    CUDA_VISIBLE_DEVICES=0 $PY tools/fit_occuq_gmm.py $CFG $1 --features $2 --out $3 --check 5
+  fi
+}
+evaluate() {  # evaluate CKPT RUN_DIR KEY OPTION=GMM_FILE
   for S in cetran test test_cetran; do
+    # a set whose run directory already holds a test.py log with the KEY row is done
+    if grep -qs " $3 | " $2/$S/*/*.log; then continue; fi
     CUDA_VISIBLE_DEVICES=0 $PY test.py $CFG $1 --work-dir $2/$S \
-      --cfg-options test_dataloader.dataset.dataset.ann_file=dso_infos_$S.pkl model.decode_head.occuq_cfg.$3
+      --cfg-options test_dataloader.dataset.dataset.ann_file=dso_infos_$S.pkl model.decode_head.occuq_cfg.$4
   done
 }
 # Steps whose output exists are skipped, so a rerun after a failure resumes.
 if [ "$V" = pe ]; then
   CKPT=work_dirs/p3former_2xb1_3x_dso/epoch_36.pth
-  [ -f $OUT/gmm_pe.pth ] || CUDA_VISIBLE_DEVICES=0 $PY tools/fit_occuq_gmm.py $CFG $CKPT --features pe --out $OUT/gmm_pe.pth --check 5
-  evaluate $CKPT $OUT pe_gmm_file=$OUT/gmm_pe.pth
+  fit $CKPT pe $OUT/gmm_pe.pth
+  evaluate $CKPT $OUT density_pe pe_gmm_file=$OUT/gmm_pe.pth
   exit 0
 fi
 for N in "$@"; do
   [ -f $OUT/seed$N/epoch_9.pth ] || CUDA_VISIBLE_DEVICES=0,1 bash dist_train.sh $CFG 2 --work-dir $OUT/seed$N --cfg-options randomness.seed=$N
-  [ -f $OUT/seed$N/gmm_head.pth ] || CUDA_VISIBLE_DEVICES=0 $PY tools/fit_occuq_gmm.py $CFG $OUT/seed$N/epoch_9.pth --features head --out $OUT/seed$N/gmm_head.pth --check 5
-  evaluate $OUT/seed$N/epoch_9.pth $OUT/seed$N gmm_file=$OUT/seed$N/gmm_head.pth
+  fit $OUT/seed$N/epoch_9.pth head $OUT/seed$N/gmm_head.pth
+  evaluate $OUT/seed$N/epoch_9.pth $OUT/seed$N density gmm_file=$OUT/seed$N/gmm_head.pth
 done
 EOF
 chmod +x /mnt/sandisk/khoadv/occuq/run_variant.sh
@@ -2704,9 +2716,15 @@ chmod +x /mnt/sandisk/khoadv/occuq/run_variant.sh
 nohup setsid bash -c "CUDA_VISIBLE_DEVICES=0 /home/khoadv/miniconda3/envs/p3former/bin/python tools/fit_occuq_gmm.py configs/p3former/p3former_2xb1_3x_dso_occuq_pe.py work_dirs/p3former_2xb1_3x_dso/epoch_36.pth --features pe --out work_dirs/p3former_2xb1_3x_dso_occuq_pe/gmm_pe.pth --check 5 > /mnt/sandisk/khoadv/occuq/pe/fit.out 2>&1" < /dev/null > /dev/null 2>&1 &
 ```
 Wait for it to finish, checking with `tail -3 /mnt/sandisk/khoadv/occuq/pe/fit.out`. Expected in `fit.out`:
+- `saved the running sums to .../gmm_pe.sums.pth`, right after the pass;
 - the per-class table, where every class has at least 2,560 voxels;
+- the regularization lines, read with `grep "^ridge \|^pooled variance" /mnt/sandisk/khoadv/occuq/pe/fit.out`:
+  - the ridge, 1e-06 × the mean pooled variance, and the shared jitter, expected 0;
+  - the number of dimensions whose pooled variance is exactly 0: expect at least one, including dim 190 (the dead `pe_conv` LayerNorm channel). If there is none, stop and report it: the features differ from the ones the final review measured.
 - `--check 5: max |log q float32 GPU - float64 CPU| = <x> nats` with x < 0.05;
 - `saved .../gmm_pe.pth`.
+
+If the fit fails after the pass, `run_variant.sh pe` (Step 6) finalizes the saved sums with `--from-sums` instead of redoing the pass.
 
 - [ ] **Step 5: Run a smoke evaluation on the 5-frame mini split**
 
@@ -2774,7 +2792,16 @@ print('changed base tensors:', [k for k in a if not torch.equal(a[k], b[k])])
 print('new modules:', sorted({k.split('.')[1] for k in b if k not in a}))
 "
 ```
-Expected: `changed base tensors: []` (this covers BatchNorm statistics and `num_batches_tracked`) and `new modules: ['occuq_head']`. Then remove the smoke run: `rm -r /mnt/sandisk/khoadv/occuq/a/smoke`.
+Expected: `changed base tensors: []` (this covers BatchNorm statistics and `num_batches_tracked`) and `new modules: ['occuq_head']`.
+
+Before removing the smoke run, smoke the head-fit path on its checkpoint:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 /home/khoadv/miniconda3/envs/p3former/bin/python tools/fit_occuq_gmm.py configs/p3former/p3former_2xb1_3x_dso_occuq_a.py work_dirs/p3former_2xb1_3x_dso_occuq_a/smoke/epoch_1.pth --features head --out /mnt/sandisk/khoadv/occuq/a/smoke_gmm_head.pth --limit 20
+```
+Expected: `20 frames in ... s` and `saved the running sums to /mnt/sandisk/khoadv/occuq/a/smoke_gmm_head.sums.pth`. Then either the min-count `ValueError` or `saved /mnt/sandisk/khoadv/occuq/a/smoke_gmm_head.pth`.
+
+Then delete the smoke outputs: `rm -r /mnt/sandisk/khoadv/occuq/a/smoke; rm -f /mnt/sandisk/khoadv/occuq/a/smoke_gmm_head.pth /mnt/sandisk/khoadv/occuq/a/smoke_gmm_head.sums.pth`.
 
 - [ ] **Step 3: Launch the three seeds, detached (about 9 h)**
 
@@ -2881,7 +2908,7 @@ Append, at the bottom of `DOCs.md`, an entry titled `## YYYY-MM-DD — OCCUQ den
 - [ ] **Step 3: Run the whole suite**
 
 Run: `/home/khoadv/miniconda3/envs/p3former/bin/python -m pytest -q tests`
-Expected: every test passes (39 existing plus 32 new, so 71). Note the summary line's count and time for Step 4.
+Expected: every test passes (39 existing plus 42 new, so 81, after the final-review amendments). Note the summary line's count and time for Step 4.
 
 - [ ] **Step 4: Update the instructions on this branch**
 
@@ -2899,7 +2926,7 @@ Append to `.claude/rules/architecture/ood-pipeline.md`:
 
 - `_P3FormerHead(occuq_cfg=...)` builds `_OCCUQHead` (`p3former/decode_heads/occuq_head.py`) on `pe_features`, next to `sem_queries`. The keys are `head`, `freeze_base`, `loss_weight`, `gmm_file`, `pe_gmm_file` and `score_chunk`.
 - With `freeze_base` (variant A), `_P3Former` freezes everything else and keeps it in eval mode, except the data preprocessor: it builds the voxel labels only in training mode.
-- `tools/fit_occuq_gmm.py` fits one Gaussian per ID class on the training split (`p3former/utils/gmm_fit.py`).
+- `tools/fit_occuq_gmm.py` fits one Gaussian per ID class on the training split (`p3former/utils/gmm_fit.py`). Every class covariance gets the same diagonal, a ridge of 1e-6 × the mean pooled variance plus a shared jitter, because `pe_features` has a dead dimension. The pass saves its sums to `<out stem>.sums.pth`, and `--from-sums` finalizes them without a new pass.
 - `predict` scores `density` and `density_pe` = asinh(−log q) with `p3former/utils/gmm_density.py`, with TF32 off only there, and stores them as `ood_density` and `ood_density_pe`. List them in `_OODPointMetric`'s `score_keys`.
 - A Gaussian file carries a fingerprint of the weights that produced its feature, and `predict` refuses a file fitted for other weights.
 ```
@@ -2920,6 +2947,7 @@ OCCUQ (branch `ood-baselines/occuq`):
 
 ```bash
 python tools/fit_occuq_gmm.py <occuq config> <checkpoint> --features head|pe --out <file> --check 5
+python tools/fit_occuq_gmm.py ... --from-sums <file stem>.sums.pth   # finalize the sums of a fit that failed after its pass
 python tools/compare_occuq_grouping.py --pe <dir> --a <seed dirs> --c <seed dirs> --out <report.md>
 /mnt/sandisk/khoadv/occuq/run_variant.sh pe | a 0 1 2 | c 0 1 2   # fit + evaluate (+ train)
 ```
@@ -2938,3 +2966,37 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_011c7SVFbsayG16DKorLVYtF
 EOF
 ```
+
+---
+
+## Amendments after the final code review (2026-10-07)
+
+The final whole-branch review found a dead dimension in the base checkpoint's `pe_features`. Channel 190 of the `decode_head.pe_conv.1` LayerNorm has γ = 0.0291 and β = −0.3372, so it is always 0 after the ReLU.
+- Every class covariance is then singular, and Task 2's per-class jitter search picks 2.2e-308.
+- The precision factor reaches ~6.7e153, which is +inf in float32, so the float32 log-density is NaN.
+- Task 7's `--check` still passed, because `max(worst, nan)` keeps `worst`.
+
+So the shipped code differs from the code blocks of Tasks 2, 3 and 7:
+
+1. **`finalize` (`p3former/utils/gmm_fit.py`).**
+   - Every class covariance gets the same diagonal, (ridge + jitter)·I. The ridge is `ridge_rel` (default 1e-6) × the mean pooled ID variance; the jitter is one value for all classes, as in OCCUQ.
+   - `cholesky_with_jitter` takes a batch and returns the first jitter for which every matrix factors.
+   - Output: `jitter` [C] is the whole diagonal added, identical across classes; `ridge` (0-d) and `pooled_var` [D] are new; `covs` stays raw. Constant features raise an error.
+2. **`tools/fit_occuq_gmm.py`.**
+   - `--check` fails on any non-finite log-density, naming the frame, and compares with `not (diff <= 0.05)` (`compare_log_densities`).
+   - Before saving, the float32 casts of `means`, `prec_chol`, `log_det_prec` and `log_prior` must be finite (`check_float32_finite`, which names the classes and the regularization).
+   - The report adds the ridge, the shared jitter, the minimum pooled variance and the zero-variance dimensions.
+   - Right after the pass, the raw sums go to `<out stem>.sums.pth`, and a pass refuses to overwrite them. `--from-sums` finalizes them without a pass, and refuses sums of other features or weights.
+3. **Tests.**
+   - `test_fit_occuq_gmm.py` covers the shared diagonal, a dead dimension, constant features and the batched jitter search.
+   - `test_gmm_density.py` compares with `covs + jitter·I`.
+   - The new `tests/test_fit_occuq_tool.py` covers the tool's helpers and, on a fake model, `fit`'s save-then-resume flow.
+   - The suite has 81 tests.
+4. **Spec.**
+   - The regularization and its reason, the Output and `--check` text, and the error list.
+   - A correction: about 1.4% of Stop and Others points lie in voxels whose majority label is an ID class, so those voxels do enter the sums.
+5. **This plan.**
+   - The Global Constraints regularization line.
+   - `run_variant.sh` (Task 9 Step 3) finalizes a fit's saved sums with `--from-sums`, skips sets that already have the score's row, and warns against `--resume`.
+   - Task 9 Steps 2 and 4 and Task 10 Step 2 (a new head-fit smoke run) expect and clean up the sums file; Step 4 also checks the regularization lines.
+   - Task 12's test count and its rule snippets.
