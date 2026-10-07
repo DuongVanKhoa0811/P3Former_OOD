@@ -25,7 +25,7 @@ The detailed instructions are split by topic into `.claude/rules/`. Rules withou
 | `experiment-log.md` | `DOCs.md` working log and reference documents |
 | `machine-resources.md` | GPU, RAM and disk budgets; detached long jobs |
 | `dso-dataset.md` | DSO class set, OOD classes, splits |
-| `torch-cuda-pitfalls.md` | TF32 and CUDA `bincount` in torch 1.10 (scoped: Python code) |
+| `torch-cuda-pitfalls.md` | TF32, CUDA `bincount` and cuSOLVER in torch 1.10 (scoped: Python code) |
 | `architecture/registry.md` | registry pattern and `custom_imports` |
 | `architecture/data-pipeline.md` | datasets, loading, class mapping, voxelization (scoped: data code) |
 | `architecture/model.md` | segmentor and P3Former head internals (scoped: `p3former/`) |
