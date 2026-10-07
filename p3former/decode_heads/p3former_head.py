@@ -13,6 +13,17 @@ from mmengine.structures import InstanceData
 from mmcv.ops import SubMConv3d
 
 from p3former.utils.ood_scores import point_ood_scores
+from p3former.decode_heads.occuq_head import _OCCUQHead
+from p3former.utils.gmm_density import (fingerprint, load_gmm,
+                                        point_density_scores)
+
+# decode_head.occuq_cfg keys (spec 2026-10-07-occuq-density-design.md)
+OCCUQ_CFG_KEYS = ('head', 'freeze_base', 'loss_weight', 'gmm_file',
+                  'pe_gmm_file', 'score_chunk')
+# the layers that produce pe_features (pe_type='mpe'); the density
+# fingerprint covers them
+MPE_MODULES = ('polar_proj', 'polar_norm', 'cart_proj', 'cart_norm',
+               'pe_conv')
 
 @MODELS.register_module()
 class _Masked_Focal_Attention(nn.Module):
@@ -216,7 +227,8 @@ class _P3FormerHead(nn.Module):
                  mask_score_thr=0.5,
                  grid_size=[480, 360, 32],
                  point_cloud_range=[],
-                 ood_cfg=None):
+                 ood_cfg=None,
+                 occuq_cfg=None):
         super().__init__()
 
         self.queries = SubMConv3d(embed_dims, num_queries, indice_key="logit", 
@@ -254,6 +266,18 @@ class _P3FormerHead(nn.Module):
             self.loss_lovasz = MODELS.build(dict(type='LovaszLoss',
                                                 reduction='none',))
             self.sem_queries = nn.Conv3d(embed_dims, num_classes, kernel_size=1, stride=1, padding=0, bias=False)
+
+        # OCCUQ (spec 2026-10-07): a spectrally normalised head next to
+        # sem_queries, whose weights also seed the stuff queries
+        self.occuq_cfg = occuq_cfg
+        self.occuq_head = None
+        # source ('head' / 'pe') -> Gaussian tensors, loaded on the first
+        # predict; a plain dict, so it never enters a checkpoint
+        self._occuq_gmms = {}
+        if occuq_cfg is not None:
+            self._check_occuq_cfg(occuq_cfg, ood_cfg, use_sem_loss, pe_type)
+            if occuq_cfg.get('head', True):
+                self.occuq_head = _OCCUQHead(embed_dims, num_classes)
 
         # build assigner
         if assigner_zero_layer_cfg is not None:
@@ -421,6 +445,7 @@ class _P3FormerHead(nn.Module):
 
         queries, features, mpe, sem_preds = self.init_inputs(
             feature_split, voxel_coor_split, batch_size)
+        occuq_out = self.occuq_forward(features)
         _, mask_preds, pos_mask_preds = self.pa_seg(queries, features, mpe, layer=0)
         class_preds_buffer.append(None)
         mask_preds_buffer.append(mask_preds)
@@ -431,10 +456,20 @@ class _P3FormerHead(nn.Module):
             class_preds_buffer.append(class_preds)
             mask_preds_buffer.append(mask_preds)
             pos_mask_preds_buffer.append(pos_mask_preds)
-        return class_preds_buffer, mask_preds_buffer, pos_mask_preds_buffer, sem_preds
+        return (class_preds_buffer, mask_preds_buffer, pos_mask_preds_buffer,
+                sem_preds, occuq_out)
 
     def loss(self, batch_inputs, batch_data_samples, train_cfg):
-        class_preds_buffer, mask_preds_buffer, pos_mask_preds_buffer, sem_preds = self.forward(batch_inputs['features'], batch_inputs['voxels']['voxel_coors'])
+        if self.occuq_cfg is not None and self.occuq_cfg.get(
+                'freeze_base', False):
+            # OCCUQ variant A: only the OCCUQ head trains, so the decoder,
+            # the matching and the panoptic losses are skipped
+            pe_features = self.extract_pe_features(
+                batch_inputs['features'],
+                batch_inputs['voxels']['voxel_coors'])
+            logits = [self.occuq_head(f)[0] for f in pe_features]
+            return self.occuq_losses(logits, batch_data_samples)
+        class_preds_buffer, mask_preds_buffer, pos_mask_preds_buffer, sem_preds, occuq_out = self.forward(batch_inputs['features'], batch_inputs['voxels']['voxel_coors'])
         cls_targets_buffer, mask_targets_buffer, label_weights_buffer = self.bipartite_matching(class_preds_buffer, mask_preds_buffer, pos_mask_preds_buffer, batch_data_samples)
         losses = dict()
         for i in range(self.num_decoder_layers+1):
@@ -451,7 +486,106 @@ class _P3FormerHead(nn.Module):
                 sem_preds, seg_label, ignore_index=self.ignore_index)
             losses['loss_lovasz'] = self.loss_lovasz(
                 sem_preds, seg_label, ignore_index=self.ignore_index)
+        if occuq_out is not None and occuq_out['logits'] is not None:
+            losses.update(
+                self.occuq_losses(occuq_out['logits'], batch_data_samples))
         return losses
+
+    @staticmethod
+    def _check_occuq_cfg(occuq_cfg, ood_cfg, use_sem_loss, pe_type):
+        """Reject occuq_cfg combinations that cannot work."""
+        unknown = sorted(set(occuq_cfg) - set(OCCUQ_CFG_KEYS))
+        if unknown:
+            raise KeyError(f'unknown occuq_cfg keys {unknown}; expected '
+                           f'{OCCUQ_CFG_KEYS}')
+        head = occuq_cfg.get('head', True)
+        if pe_type != 'mpe':
+            raise ValueError("occuq_cfg needs pe_type='mpe': the density "
+                             'fingerprint covers the MPE layers')
+        if head and not use_sem_loss:
+            raise ValueError('occuq_cfg.head needs use_sem_loss=True: the '
+                             'OCCUQ head reuses its CE and Lovasz losses')
+        if occuq_cfg.get('freeze_base', False) and not head:
+            raise ValueError('occuq_cfg.freeze_base needs head=True: '
+                             'nothing else would train')
+        if occuq_cfg.get('gmm_file') and not head:
+            raise ValueError('occuq_cfg.gmm_file needs head=True: density '
+                             'is computed on the OCCUQ head feature')
+        if (occuq_cfg.get('gmm_file')
+                or occuq_cfg.get('pe_gmm_file')) and ood_cfg is None:
+            raise ValueError('occuq_cfg Gaussian files need ood_cfg: the '
+                             'density scores are emitted with the OOD scores')
+
+    def occuq_forward(self, pe_features):
+        """OCCUQ outputs per sample: dict(pe, logits, feature), with logits
+        and feature None without the head; None without occuq_cfg."""
+        if self.occuq_cfg is None:
+            return None
+        out = dict(pe=pe_features, logits=None, feature=None)
+        if self.occuq_head is not None:
+            heads = [self.occuq_head(f) for f in pe_features]
+            out['logits'] = [logits for logits, _ in heads]
+            out['feature'] = [feature for _, feature in heads]
+        return out
+
+    def extract_pe_features(self, features, voxel_coors):
+        """Per-sample pe_features (the semantic branch's input), computed
+        as in forward but without the decoder."""
+        batch_size = int(voxel_coors[:, 0].max().item()) + 1
+        feature_split = [
+            features[voxel_coors[:, 0] == i] for i in range(batch_size)
+        ]
+        coor_split = [
+            voxel_coors[voxel_coors[:, 0] == i] for i in range(batch_size)
+        ]
+        pe_features, _ = self.mpe(feature_split, coor_split, batch_size)
+        return pe_features
+
+    def occuq_losses(self, logits, batch_data_samples):
+        """The OCCUQ head's CE and Lovasz losses on the voxel labels."""
+        seg_label = torch.cat([
+            data_sample.gt_pts_seg.voxel_semantic_mask
+            for data_sample in batch_data_samples
+        ])
+        logits = torch.cat(logits, dim=0)
+        weight = self.occuq_cfg.get('loss_weight', 1.0)
+        return dict(
+            loss_occuq_ce=weight * self.loss_ce(
+                logits, seg_label, ignore_index=self.ignore_index),
+            loss_occuq_lovasz=weight * self.loss_lovasz(
+                logits, seg_label, ignore_index=self.ignore_index))
+
+    def density_scores(self, occuq_out, batch_idx, point2voxel_map):
+        """OCCUQ density scores of one sample, for the configured Gaussian
+        files: 'density' (OCCUQ head feature) and/or 'density_pe'
+        (pe_features), as per-point float32 arrays."""
+        scores = {}
+        if occuq_out is None:
+            return scores
+        chunk = self.occuq_cfg.get('score_chunk', 65536)
+        for key, source, file_key in (('density', 'head', 'gmm_file'),
+                                      ('density_pe', 'pe', 'pe_gmm_file')):
+            path = self.occuq_cfg.get(file_key)
+            if not path:
+                continue
+            feats = occuq_out['feature' if source == 'head' else 'pe'][
+                batch_idx]
+            if source not in self._occuq_gmms:
+                self._occuq_gmms[source] = load_gmm(
+                    path, source, self.density_fingerprint(source),
+                    feats.device)
+            scores[key] = point_density_scores(
+                feats, self._occuq_gmms[source], point2voxel_map, chunk)
+        return scores
+
+    def density_fingerprint(self, source):
+        """SHA-256 of the weights that produce the density feature of
+        ``source``: the MPE layers for 'pe', plus the OCCUQ head for
+        'head'."""
+        names = list(MPE_MODULES)
+        if source == 'head':
+            names.append('occuq_head')
+        return fingerprint((name, getattr(self, name)) for name in names)
 
     def bipartite_matching(self, class_preds, mask_preds, pos_mask_preds, batch_data_samples):
         gt_classes, gt_masks = self.generate_mask_class_target(batch_data_samples)
@@ -699,7 +833,7 @@ class _P3FormerHead(nn.Module):
         return labels, mask_targets, label_weights, mask_weights
 
     def predict(self, batch_inputs, batch_data_samples):
-        class_preds_buffer, mask_preds_buffer, _, sem_preds = self.forward(batch_inputs['features'], batch_inputs['voxels']['voxel_coors'])
+        class_preds_buffer, mask_preds_buffer, _, sem_preds, occuq_out = self.forward(batch_inputs['features'], batch_inputs['voxels']['voxel_coors'])
         semantic_preds, instance_ids = self.generate_panoptic_results(class_preds_buffer[-1], mask_preds_buffer[-1])
         semantic_preds = torch.cat(semantic_preds)
         instance_ids = torch.cat(instance_ids)
@@ -722,14 +856,17 @@ class _P3FormerHead(nn.Module):
                 num_logits = self.ood_cfg.get('num_ood_logits',
                                               self.num_classes - 1)
                 voxel_logits = sem_preds[batch_idx][:, :num_logits]
-                pts_ood_scores.append(
-                    point_ood_scores(
-                        voxel_logits,
-                        point2voxel_map,
-                        odin_temperature=self.ood_cfg.get(
-                            'odin_temperature', 1000.0),
-                        energy_temperature=self.ood_cfg.get(
-                            'energy_temperature', 1.0)))
+                scores = point_ood_scores(
+                    voxel_logits,
+                    point2voxel_map,
+                    odin_temperature=self.ood_cfg.get(
+                        'odin_temperature', 1000.0),
+                    energy_temperature=self.ood_cfg.get(
+                        'energy_temperature', 1.0))
+                scores.update(
+                    self.density_scores(occuq_out, batch_idx,
+                                        point2voxel_map))
+                pts_ood_scores.append(scores)
 
         return pts_semantic_preds, pts_instance_preds, pts_ood_scores
 
