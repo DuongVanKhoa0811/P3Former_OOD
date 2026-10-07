@@ -4,9 +4,16 @@ from mmdet3d.models.segmentors.cylinder3d import Cylinder3D
 from mmdet3d.structures import PointData
 from mmdet3d.utils import ConfigType, OptConfigType, OptMultiConfig
 
+from p3former.utils.freeze import eval_all_but, freeze_all_but
+
+
 @MODELS.register_module()
 class _P3Former(Cylinder3D):
     """P3Former."""
+
+    # OCCUQ variant A (decode_head.occuq_cfg.freeze_base): only the OCCUQ
+    # head trains (spec docs/superpowers/specs/2026-10-07-occuq-density-design.md)
+    freeze_base = False
 
     def __init__(self,
                  voxel_encoder: ConfigType,
@@ -29,6 +36,24 @@ class _P3Former(Cylinder3D):
                         test_cfg=test_cfg,
                         data_preprocessor=data_preprocessor,
                         init_cfg=init_cfg)
+        occuq_cfg = getattr(self.decode_head, 'occuq_cfg', None)
+        if occuq_cfg is not None and occuq_cfg.get('freeze_base', False):
+            self.freeze_base = True
+            freeze_all_but(self, self.decode_head.occuq_head)
+
+    def train(self, mode: bool = True):
+        """As nn.Module.train.
+
+        With freeze_base, the voxel encoder, the backbone and the decode
+        head outside the OCCUQ head stay in eval mode (fixed BatchNorm
+        statistics). The data preprocessor keeps ``mode``, because it builds
+        the voxel labels only in training mode."""
+        super().train(mode)
+        if self.freeze_base:
+            for part in (self.voxel_encoder, self.backbone,
+                         self.decode_head):
+                eval_all_but(part, self.decode_head.occuq_head)
+        return self
 
     def loss(self, batch_inputs_dict,batch_data_samples):
         """Calculate losses from a batch of inputs and data samples.
@@ -47,8 +72,12 @@ class _P3Former(Cylinder3D):
             Dict[str, Tensor]: A dictionary of loss components.
         """
 
-        # extract features using backbone
-        x = self.extract_feat(batch_inputs_dict)
+        # extract features using backbone; frozen in OCCUQ variant A
+        if self.freeze_base:
+            with torch.no_grad():
+                x = self.extract_feat(batch_inputs_dict)
+        else:
+            x = self.extract_feat(batch_inputs_dict)
         batch_inputs_dict['features'] = x.features
         losses = dict()
         loss_decode = self._decode_head_forward_train(batch_inputs_dict, batch_data_samples)
