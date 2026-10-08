@@ -16,6 +16,8 @@ This is branch `ood-baselines/grouping`: the flat baselines of `ood-baselines/fl
 
 The detailed instructions are split by topic into `.claude/rules/`. Rules without `paths` frontmatter load at the start of every session; the scoped ones load when Claude reads a matching file.
 
+`.claude/memory.md` lists the servers the repo runs on (A, B and C), how to tell which one a session is on, and what differs on each. It loads with this file: @memory.md
+
 | Rule | Topic |
 | --- | --- |
 | `branches.md` | the OOD branches and how changes move between them |
