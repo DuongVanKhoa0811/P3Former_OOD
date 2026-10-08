@@ -24,7 +24,7 @@ The detailed instructions are split by topic into `.claude/rules/`. Rules withou
 | `testing.md` | unit-test suite |
 | `configs.md` | config naming, variants, generated configs, overrides |
 | `experiment-log.md` | `DOCs.md` working log and reference documents |
-| `machine-resources.md` | GPU, RAM and disk budgets; detached long jobs |
+| `machine-resources.md` | GPU, RAM and disk budgets; detached long jobs; copying data to another server |
 | `dso-dataset.md` | DSO class set, OOD classes, splits |
 | `offline-tools.md` | analysis scripts in `tools/` |
 | `torch-cuda-pitfalls.md` | TF32, CUDA `bincount` and cuSOLVER in torch 1.10 (scoped: Python code) |
