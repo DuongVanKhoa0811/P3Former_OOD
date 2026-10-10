@@ -9,7 +9,7 @@ Fork of [P3Former](https://github.com/InternRobotics/P3Former) (DETR-style trans
 - **DSO dataset** support: a 24-class LiDAR dataset with a native PLY loader, an info-pkl converter, and extra Cetran test sets.
 - **Post-hoc point-level OOD scoring** from the auxiliary semantic branch: MSP, MaxLogit, ODIN, Energy and Entropy, plus an OOD metric.
 
-This is branch `ood-baselines/flat`, the base of the OOD research branches; `rules/branches.md` lists them and how changes move between them. `trash/`, `work_dirs/`, `data/`, `checkpoint/`, `papers/`, a root-level `CLAUDE.md` and `AGENTS.md` are gitignored.
+This is branch `ood-baselines/occuq`: the flat baselines of `ood-baselines/flat` plus OCCUQ's feature-density score (spec `docs/superpowers/specs/2026-10-07-occuq-density-design.md`). `rules/branches.md` lists the OOD branches and how changes move between them. `trash/`, `work_dirs/`, `data/`, `checkpoint/`, `papers/`, a root-level `CLAUDE.md` and `AGENTS.md` are gitignored.
 
 ## Rules
 
@@ -33,7 +33,7 @@ The detailed instructions are split by topic into `.claude/rules/`. Rules withou
 | `architecture/model.md` | segmentor and P3Former head internals (scoped: `p3former/`) |
 | `architecture/ood-pipeline.md` | how OOD scores flow from the head to the metric |
 
-## Progress log (updated 2026-09-29)
+## Progress log (updated 2026-10-10)
 
 Numbers are AUROC / AP / FPR@95 in %. The dates in brackets are the `DOCs.md` entries with the commands and full tables.
 
@@ -50,14 +50,18 @@ Numbers are AUROC / AP / FPR@95 in %. The dates in brackets are the `DOCs.md` en
 | Trained models | `work_dirs/p3former_2xb1_3x_{dso,semantickitti}/epoch_36.pth`. DSO test PQ 46.50, mIoU 48.66. SemanticKITTI val PQ 60.32, against 62.63 for the official checkpoint. |
 | Online OOD scoring and metric | Complete; 39 tests pass. Energy is the best flat score on DSO test + Cetran, 92.88 / 35.55 / 37.94. On SemanticKITTI val with the 2xb1 checkpoint, ODIN is best, 91.46 / 26.94 / 38.33. |
 
-### Next step: OCCUQ on `ood-baselines/occuq`
+### OCCUQ (done 2026-10-10)
 
-Port the ideas of OCCUQ (Heidrich, Beemelmanns et al., ICRA 2025; `papers/RelatedPapers/OCCUQ_*.pdf`). Start with superpowers brainstorming → spec → plan. What matters for the port:
+- **Built** (plan `docs/superpowers/plans/2026-10-07-occuq-density.md`): OCCUQ's feature-density OOD score. A spectrally normalised residual-MLP head, `_OCCUQHead`, sits next to `sem_queries` in `_P3FormerHead(occuq_cfg=...)`; `tools/fit_occuq_gmm.py` fits one Gaussian per ID class on the training split; `predict` scores `density` (the head's features) and `density_pe` (the base model's `pe_features`). Three configs: `_occuq_pe` (evaluation only), `_occuq_a` (head trained on the frozen model) and `_occuq_c` (end-to-end fine-tune); A and C ran with seeds 0–2. `tools/compare_occuq_grouping.py` compares them with grouping.
+- **Verdict** against the best of the 33 robust grouping splits (like-for-like improvement, over the seeds). No variant beats grouping on any set:
 
-- OCCUQ is DDU for 3D occupancy. The prediction head becomes spectrally normalised residual MLP blocks, then one full-covariance Gaussian per class is fitted on the head's penultimate per-voxel features over the **training** set. Epistemic score = −log Σ_c π_c N(z; μ_c, Σ_c); aleatoric = softmax entropy.
-- In P3Former the analogous feature is `pe_features` [V, 256] in `p3former/decode_heads/p3former_head.py`, the input to the bias-free `sem_queries` classifier. A post-hoc variant runs on the existing checkpoints; the faithful one fine-tunes a spectrally normalised side branch and leaves PQ unchanged.
-- It needs no class hierarchy, only the flat plumbing: `ood_cfg`, `point_ood_scores`, `postprocess_result`, and `_OODPointMetric` with the new key listed in `score_keys`.
-- `tools/ood_distance.py` on `origin/duy/ood-baselines` already captures `pe_features` and fits per-class Gaussians with a tied covariance, but on the split it scores, with that split's labels. Fit on the training split instead.
+  | variant | Cetran | test | test + Cetran |
+  | --- | --- | --- | --- |
+  | pe | worse | worse | worse |
+  | A | worse | worse | worse |
+  | C | worse | worse | worse |
+
+- **Log.** The `DOCs.md` entry of 2026-10-10 holds the commands, the per-set tables, C's per-seed PQ / mIoU and the dead-dimension check.
 
 ### Key decisions and how they were handled
 

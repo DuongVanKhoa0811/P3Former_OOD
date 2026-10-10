@@ -24,3 +24,12 @@ Outputs go to `work_dirs/<config-name>/`, with the log in a timestamped subdirec
 
 - `work_dirs/p3former_2xb1_3x_{dso,semantickitti}/epoch_36.pth`: our own runs.
 - `checkpoint/semantickitti_val_62.6.pth`: the official checkpoint, used with the `8xb2` configs.
+
+OCCUQ (branch `ood-baselines/occuq`):
+
+```bash
+python tools/fit_occuq_gmm.py <occuq config> <checkpoint> --features head|pe --out <file> --check 5
+python tools/fit_occuq_gmm.py ... --from-sums <file stem>.sums.pth   # finalize the sums of a fit that failed after its pass
+python tools/compare_occuq_grouping.py --pe <dir> --a <seed dirs> --c <seed dirs> --out <report.md>
+../store/occuq/run_variant.sh pe | a 0 1 2 | c 0 1 2   # server C, inside a PBS GPU job: fit + evaluate (+ train; TRAIN_ONLY=1 trains only)
+```

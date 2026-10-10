@@ -1,7 +1,7 @@
 # Tests
 
 ```bash
-# 39 tests, ~5 s. Every test file also runs as a plain script.
+# 81 tests, ~1.5 min on server C. Every test file also runs as a plain script.
 python -m pytest -q tests
 python -m pytest -q tests/test_ood_scores.py::test_energy_temperature
 ```
