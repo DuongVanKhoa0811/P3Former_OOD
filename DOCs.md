@@ -416,7 +416,8 @@ so a checkpoint at epoch 9 only and no retry. Seed c0 and epochs 1–3 of seeds 
 ran version 2 (a checkpoint every epoch, up to 3 attempts, each resuming from the last
 checkpoint); epochs 4–9 of c1 and c2 ran version 3, the block above (up to 5 attempts
 and, for variant c, mmengine's `EmptyCacheHook` after every training iteration). The
-three versions differ only in the training step.
+three versions differ only in the training step, its header comments and, in version 3,
+the `EXTRA` array that feeds it.
 
 The runs did not use three detached invocations (`run_variant.sh pe`, `a 0 1 2`,
 `c 0 1 2`). They ran as PBS jobs on the cluster's V100s, each with the job header of
@@ -453,25 +454,32 @@ V100s: the flat rows of the pe runs match server A's logged values within 0.011 
 sweep logs. Each `improvement` is measured against its own runs' R, so a small server
 offset does not bias the verdict.
 
-Why C's training restarted, so that a rerun on a V100 does not repeat it. The first runs
-of C died of CUDA out-of-memory errors on the 32 GiB V100s: seed c1 in epoch 1 (18.03 GiB
-allocated and 20.30 GiB reserved by PyTorch, of 31.73 GiB) and seed c0 in epoch 6 (17.69
-and 20.33 GiB); c2, which shared c1's job, was restarted with it. The ~11.4 GiB that
-PyTorch's allocator did not hold matches mmcv 2.0.0rc4's sparse-convolution index kernels
-(`mmcv/ops/csrc/pytorch/cuda/sparse_indice.cu`, `KernelMaxVolume` 4096): their 64 KiB
-local array per thread keeps about 10 GiB of a V100 for the whole run, which leaves C's
-training (logged peak allocation up to 18.8 GiB) too little room for fragmentation. A
-peaks at about 3.7 GiB and is not at risk. The reruns set the allocator variable and save
-a checkpoint every epoch, from which `run_variant.sh` resumes after a failed attempt. The
-allocator setting alone did not lower the crash rate: seeds c1 and c2 each crashed once
-more, in epoch 3, and each resumed from its `epoch_2.pth` (`seed1/epoch_2.pth`,
-`seed2/epoch_2.pth`). So from epoch 4 their job ran version 3, which empties PyTorch's
-cache after every iteration and costs about 8 % in speed (median logged time per
-iteration 1.25 s against 1.16 s); that job started from each seed's `epoch_3.pth`. Seeds
-c1 and c2 therefore trained epochs 1–2 from the base checkpoint, epoch 3 after a resume
-from epoch 2 and epochs 4–9 after a resume from epoch 3, with no further failure; seed
-c0 is the only C seed that trained without a resume (one attempt, no failure). The
-archived first attempts (`../store/occuq/c/failed_oom_20261009/`) are not results.
+C's training had to be restarted; the causes are below, so that a rerun on a V100 does
+not repeat them.
+
+- **The crashes.** The first runs of C died of CUDA out-of-memory errors on the 32 GiB
+  V100s: seed c1 in epoch 1 (18.03 GiB allocated and 20.30 GiB reserved by PyTorch, of
+  31.73 GiB) and seed c0 in epoch 6 (17.69 and 20.33 GiB); c2, which shared c1's job, was
+  restarted with it. The archived first attempts (`../store/occuq/c/failed_oom_20261009/`)
+  are not results.
+- **The cause.** The ~11.4 GiB that PyTorch's allocator did not hold matches mmcv
+  2.0.0rc4's sparse-convolution index kernels
+  (`mmcv/ops/csrc/pytorch/cuda/sparse_indice.cu`, `KernelMaxVolume` 4096): their 64 KiB
+  local array per thread keeps about 10 GiB of a V100 for the whole run, which leaves C's
+  training (logged peak allocation up to 18.8 GiB) too little room for fragmentation. A
+  peaks at about 3.7 GiB and is not at risk.
+- **The remedies.** The reruns set the allocator variable and save a checkpoint every
+  epoch, from which `run_variant.sh` resumes after a failed attempt. The allocator
+  setting alone did not lower the crash rate: seeds c1 and c2 each crashed once more, in
+  epoch 3. So from epoch 4 their job ran version 3, which empties PyTorch's cache after
+  every iteration and costs about 8 % in speed (median logged time per iteration 1.25 s
+  against 1.16 s).
+- **The resumes.** After the epoch-3 crash, seeds c1 and c2 each resumed from their
+  `epoch_2.pth` (`seed1/epoch_2.pth`, `seed2/epoch_2.pth`), and the version-3 job started
+  from each seed's `epoch_3.pth`. So c1 and c2 trained epochs 1–2 from the base
+  checkpoint, epoch 3 after a resume from epoch 2 and epochs 4–9 after a resume from
+  epoch 3, with no further failure; seed c0 is the only C seed that trained without a
+  resume (one attempt, no failure).
 
 The comparison reads logs only, so it ran on the login node:
 
@@ -537,6 +545,8 @@ R (mean of the base model's flat MSP, Energy and Entropy): 90.01 / 26.57 / 42.87
 
 C after fine-tuning (mean over runs): PQ 46.61, mIoU 48.28, own flat Energy 92.94 | 39.63 | 37.87; base model PQ 46.20, mIoU 47.95.
 
+#### Per seed, and reading
+
 C per seed, PQ / mIoU in % (the final `Epoch(test)` line of each run's log; the base
 model is the pe run):
 
@@ -550,11 +560,15 @@ model is the pe run):
 **Reading.** No variant beats grouping on any set: all nine verdicts are `worse`, no
 variant beats any of the 33 splits (0/33), and every mean improvement also stays below the
 base model's flat Energy (9.45 / 21.34 / 16.77 on Cetran / test / test + Cetran); the
-highest is C on Cetran, 7.30. The spectrally normalized head matters: A's mean
-improvement is 21 to 24 points above pe's on every set and each of its three seeds is
-above pe, but A still does not reach flat Energy, and C adds only 1.0 to 5.7 points over
-A. C's PQ cost is nil on average on test and test + Cetran (mean PQ 0.55 and 0.41 points
-above the base model) and 0.21 points on Cetran (35.14 against 35.35).
+highest is C on Cetran, 7.30. The density on A's head features scores far better than on
+pe's `pe_features`: A's mean improvement is 21 to 24 points above pe's on every set, and
+each of its three seeds is above pe. That comparison changes the training and the feature
+layer together (a trained head's features against the frozen base's `pe_features`), so
+it does not isolate spectral normalization. A still does not reach flat Energy. C's mean
+improvement is 1.0 to 5.7 points above A's, but the seed ranges are disjoint only on
+Cetran ([5.97, 9.19] against [0.16, 2.93]) and overlap on test and test + Cetran. C's PQ
+cost is nil on average on test and test + Cetran (mean PQ 0.55 and 0.41 points above the
+base model) and 0.21 points on Cetran (35.14 against 35.35).
 
 **Per seed.** PQ holds for every C seed on test (+0.30 to +0.69 over the base model) and
 on test + Cetran (+0.14 to +0.59), but on Cetran alone it moved +1.10, −1.09 and −0.63
@@ -570,9 +584,9 @@ advance and its numbers come from the online metric.
 ### Dead-dimension check
 
 The fit found three channels of `pe_features` that are 0 on every training voxel (116,
-190 and 252), so `density_pe`'s Gaussians carry the shared ridge there (6.76e-8), and a
-voxel that fired one of them would be charged x² / (2 × 6.76e-8) nats for an activation
-x. Whether these dimensions, rather than the Gaussians over the others, explain
+190 and 252), so `density_pe`'s Gaussians carry the shared ridge there (6.761e-08), and a
+voxel that fired one of them would be charged x² / (2 × 6.761e-08) nats for an
+activation x. Whether these dimensions, rather than the Gaussians over the others, explain
 `density_pe`'s weak AP was checked on 2026-10-09 at the user's request, with
 `../store/occuq/deaddims/deaddims.py` (untracked; one 1-GPU job of about 5 minutes on a
 V100; results in `../store/occuq/deaddims/results.json`). It runs the base model on every
@@ -593,4 +607,13 @@ The sample rows are within 0.4 AUROC, 2.1 AP and 3.1 FPR@95 of the full-set rows
 weak AP of `density_pe` comes from the Gaussians over the other 253 dimensions. The
 limits: only the three exactly dead dimensions were tested, not near-ridge
 eigen-directions, and zero firing in 361 frames bounds the share of firing frames at
-about 0.8 % (rule of three).
+about 0.8 % (rule of three). The check also did not cover two dimensions that are
+exactly 0 within a single class, and both are among those 253 dimensions: in `gmm_pe.pth`,
+unpaved-road (class 10, 39,373 voxels) in dimension 191 (class mean 0, pooled variance
+0.712) and drain (class 19, 155,261 voxels) in dimension 233 (class mean 0, pooled
+variance 0.000615), where the other classes vary; those two Gaussians have only the
+ridge, 6.761e-08, as variance there (`../store/occuq/pe/fit.out`: every class gets
+6.761e-08 on its diagonal), so a point that is exactly 0 in that dimension gets
+−0.5 ln(2π · 6.761e-08) = 7.34 nats of log-density from it and a point anywhere else
+gets a steep penalty. The head fits of A and C (all six seeds) have no dimension with
+zero variance in any class.
