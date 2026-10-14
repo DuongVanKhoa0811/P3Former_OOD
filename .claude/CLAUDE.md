@@ -37,7 +37,7 @@ The detailed instructions are split by topic into `.claude/rules/`. Rules withou
 
 ## Progress log (updated 2026-10-06)
 
-Numbers are AUROC / AP / FPR@95 in %. The dates in brackets are the `DOCs.md` entries with the commands and full tables.
+Numbers are AUROC / AP / FPR@95 in %. The dates in brackets are `DOCs.md` entries; the long ones link to their full record in `docs/experiments/`.
 
 ### Completed from 2026-08-12 to 2026-10-06
 
@@ -86,7 +86,7 @@ Numbers are AUROC / AP / FPR@95 in %. The dates in brackets are the `DOCs.md` en
 
 ### Findings: why some two-group splits beat the flat scores (2026-09-30)
 
-The full tables and commands are in the two `DOCs.md` entries of 2026-09-30. The spec is `docs/superpowers/specs/2026-09-29-divided-mass-resemblance-design.md`.
+The full tables and commands are in `docs/experiments/2026-09-30-divided-mass.md` and `docs/experiments/2026-09-30-ood-resemblance.md`, summarized in the two `DOCs.md` entries of 2026-09-30. The spec is `docs/superpowers/specs/2026-09-29-divided-mass-resemblance-design.md`.
 
 - **Mechanism.** Group MSP flags only the points whose mass is divided across the split. A split beats flat when it keeps far more of flat MSP's uncertain OOD points than of its uncertain ID points. Divided precision is the best single predictor.
 - **FPR@95 is set by depth.** The exact FPR@95 equals the ID divided share at δ95, the depth at which 95 % of the OOD points are divided. {bicycle} on test looks clean at δ = 0.05 but has δ95 ≈ 1e-9, so it scores −40.1.

@@ -449,50 +449,14 @@ confidence). Smoke-verified on the 5-frame mini: offline recomputation matches t
 
 ## 2026-09-15 — Random two-group partitions of the 24 classes (offline sweep)
 
-`tools/sweep_bipartitions.py` scores random 2-group partitions of the 24 classes straight
-from a logits dump, without running the model: the smaller group's size is drawn uniformly
-from 1..12, then its classes at random; the vehicle-vs-rest split (`s0.1.2.3.4` =
-`p_v_hgcno`) is always included as a cross-check. Names are the train ids of the smaller
-group (`partitions.tsv` lists the class names). Same score formulas as `ood_scores.py`,
-same metric formulas as `_OODPointMetric`; `bipartitions.log` is read by
-`summarize_hierarchy_ablation.py`. Several dump directories are evaluated as one split.
+`tools/sweep_bipartitions.py` scores 500 random two-group partitions of the 24 classes
+(seed 0) straight from the logit dumps, without running the model; vehicle-vs-rest
+(`s0.1.2.3.4` = `p_v_hgcno`) is always included. A held-out test dump was added, so the
+sweep runs on Cetran, test and test + Cetran. With log-spaced bins the flat and Group rows
+reproduce the online metric to <= 0.05, with one exception; the GN family is not ranked
+offline (see 2026-09-24).
 
-- **Splits.** `dso_infos_test_cetran.pkl` is exactly test + Cetran (same frames, same order),
-  so only the held-out test split needed a new dump:
-  `p3former_2xb1_3x_dso_ood_dump_test.py` (2,625 frames, 55 GB, written to
-  `/mnt/sandisk/khoadv/...` and symlinked as `work_dirs/p3former_2xb1_3x_dso_ood_dump/logits_test`;
-  ~25 min, ~103 GB RAM). Passing `logits_test` + `logits` gives test + Cetran, `logits_test`
-  alone the test split.
-- **Backend.** `--backend numpy` (default) uses CPU workers (Cetran: ~1 h with 8 workers);
-  `--backend torch --device cuda:N` does the same two passes on a GPU: Cetran 13 min, test
-  54 min, test + Cetran 67 min. TF32 matmuls are switched off (they shift the group masses by
-  ~4e-4 and FPR@95 by up to 57 points) and CUDA `bincount` is replaced by a sort-based count
-  (~340 ms vs ~1 ms per block in torch 1.10).
-- **Bins.** 2^16 bins, log-spaced towards both ends of every score range (`--bin-eps`;
-  `--bin-eps 0` = the equal-width bins of the online metric). Equal-width bins at 2^16 cannot
-  separate very confident OOD points from the ID mass: on the test split more than 5% of the
-  OOD points sit within 7.6e-6 of full confidence and FPR@95 read 100% for 43/500 splits.
-  With log-spaced bins the flat and Group rows reproduce the online metric to <= 0.05 on all
-  three splits (vehicle-vs-rest Group MSP on Cetran: 96.00/47.23/18.42 offline = online). One
-  exception, Group MSP FPR@95 of vehicle-vs-rest on test (67.10 offline, 68.02 online), is
-  the online value's own bin limit: for two groups Group Entropy is a monotone function of
-  Group MSP, so both must give the same FPR@95 — 67.07 / 67.10 offline, 67.12 / 68.02 online. GN
-  MSP / GN Entropy stay approximate — they pile up at an interior value, -(1 - prior) — e.g.
-  test vehicle-vs-rest GN MSP FPR@95 98.38 offline vs 76.99 online; GN Energy is exact.
-
-```bash
-# held-out test dump (once), then the sweeps; long jobs: start them with nohup setsid ... &
-CUDA_VISIBLE_DEVICES=0 python test.py configs/p3former/p3former_2xb1_3x_dso_ood_dump_test.py work_dirs/p3former_2xb1_3x_dso/epoch_36.pth
-W=work_dirs/p3former_2xb1_3x_dso_ood_dump
-python tools/sweep_bipartitions.py --backend torch --device cuda:0 $W/logits                                                        # Cetran      -> $W/bipartitions
-python tools/sweep_bipartitions.py --backend torch --device cuda:0 $W/logits_test --out-dir $W/bipartitions_test                    # test
-python tools/sweep_bipartitions.py --backend torch --device cuda:0 $W/logits_test $W/logits --out-dir $W/bipartitions_test_cetran   # test + Cetran
-python tools/summarize_hierarchy_ablation.py --family group --exclude odin --plot $W/bipartitions_test_cetran/top4_group.png $W/bipartitions_test_cetran/bipartitions.log
-```
-
-Results (500 partitions, seed 0; family group, ODIN excluded — the GN family is not ranked
-offline, see 2026-09-24; Group MSP as AUROC/AP/FPR@95, improvement = mean dAUROC + mean dAP
-- mean dFPR@95):
+Results (Group MSP as AUROC/AP/FPR@95, improvement = mean dAUROC + mean dAP - mean dFPR@95):
 
 | split (flat MSP; flat Energy) | above flat | best split | its Group MSP | improvement |
 | --- | --- | --- | --- | --- |
@@ -500,33 +464,15 @@ offline, see 2026-09-24; Group MSP as AUROC/AP/FPR@95, improvement = mean dAUROC
 | test (86.26/13.75/51.15; 92.36/35.47/42.56) | 136 | `s16` {overhead-bridge} | 94.21/39.75/29.06 | +34.78 |
 | test + Cetran (87.76/18.06/45.76; 92.88/35.54/37.95) | 99 | `s16` {overhead-bridge} | 94.04/40.45/28.52 | +27.42 |
 
-- **The Cetran winners do not transfer.** On test + Cetran `s1.3.17` drops to #45 (+7.38,
-  91.70/26.56/41.73) and vehicle-vs-rest (`p_v_hgcno`, #12 on Cetran with +21.37) to #142
-  (-3.17, 90.07/25.30/54.59); on test alone they fall below flat (-0.27 and -10.88; online
-  test `p_v_hgcno` Group MSP 87.21/17.23/68.02 vs flat MSP 86.26/13.76/51.15). Rank
-  correlation of the improvement: Cetran~test +0.61, test~test+Cetran +0.97 (test has 4x the
-  points). 32 splits beat flat on both Cetran and test.
-- **test + Cetran top 5:** `s16` +27.42, `s2.16` {motorcycle, overhead-bridge} +26.24
-  (94.16/37.98/27.90), `s4.16` {bus, overhead-bridge} +23.50, `s2.3.4.5.6.16` +21.01,
-  `s4.5.6.16` +19.39. Overhead-bridge alone is the best split on test and test + Cetran but
-  only #40 on Cetran (+7.03); single classes above flat on test + Cetran: overhead-bridge
-  +27.4, gate +10.1, truck +4.0, perimeter-barrier +1.2 (Cetran: truck +25.2, gate +17.5,
-  overhead-bridge +7.0, bicycle +5.8). Building, drain, unpaved-road, bus and overhead-bridge
-  are over-represented in the top-20 smaller groups; paved-road, sidewalk, terrain, trunks
-  and vegetation never appear there on any split.
-- **Most robust splits** (largest worst-case improvement over Cetran and test):
-  `s0.1.3.5.10.16` {car, bicycle, truck, person, unpaved-road, overhead-bridge} +17.87 / +19.04
-  (test + Cetran +18.66, 93.52/33.19/33.63) and `s2.3.4.5.6.16` {motorcycle, truck, bus, person,
-  rider, overhead-bridge} +16.94 / +22.23 (test + Cetran +21.01, 93.84/34.65/31.91).
-- **Reading.** A two-group Group-MSP flags a point when its mass is split between the two
-  groups, so the best split isolates the classes the OOD points are confused with and
-  merges every within-ID confusion. Which classes those are depends on the scenes — truck /
-  gate on Cetran, overhead-bridge (and building / drain / unpaved-road) on the test routes —
-  so a split picked on one split is tuned to its OOD objects. The gain is in the MSP /
-  Entropy scores; Group Energy moves by < 1 point everywhere.
+The Cetran winners do not transfer: on test alone `s1.3.17` and vehicle-vs-rest fall below
+flat (-0.27 and -10.88), and the Cetran~test rank correlation of the improvement is +0.61.
+32 splits beat flat on both Cetran and test. The best split isolates the classes the OOD
+points are confused with, and those depend on the scenes (truck / gate on Cetran,
+overhead-bridge on the test routes); the gain is in the MSP / Entropy scores, while Group
+Energy moves by < 1 point. These are selections on the evaluation data: confirm a split
+online on data it was not picked on before reporting it.
 
-Caveat: these are selections among 500 random splits on the evaluation data itself — report
-a split only after confirming it online (`class_groups_variants`) on data it was not picked on.
+Full record (commands, backends, bins, top 5, single classes, most robust splits): [docs/experiments/2026-09-15-bipartition-sweep.md](docs/experiments/2026-09-15-bipartition-sweep.md)
 
 ## 2026-09-24 — Offline GN rankings withdrawn (Codex review)
 
@@ -541,260 +487,59 @@ GN family from test.py logs, or add interior-adaptive bins first.
 
 ## 2026-09-30 — Why some two-group splits beat flat: divided mass
 
-For a split A | B, Group MSP is m − 1, where m = min(P_A, P_B) is the *divided mass*. A point is *divided* at δ when m ≥ δ; at δ = 0.05 that means 0.05 ≤ P_A ≤ 0.95. So the OOD / ID divided shares at δ are Group MSP's TPR / FPR at the threshold δ − 1. Flat MSP has the same reading through u = 1 − max p, and u ≥ m for every point. `tools/divided_mass.py` histograms m and u from the logit dumps for two sets of splits, then joins the sweep's metric deltas:
-- the 24 single-class splits. The 500-split sweep had missed {unpaved-road}, {sidewalk} and {building}, so all 24 are now also scored with `sweep_bipartitions.py --subsets singletons`;
-- the 500 sweep splits.
+For a split A | B, Group MSP is m − 1, where m = min(P_A, P_B) is the *divided mass*; a point
+is divided at δ when m ≥ δ, so the OOD / ID divided shares are Group MSP's TPR / FPR at the
+threshold δ − 1. `tools/divided_mass.py` histograms m (and flat MSP's u = 1 − max p) from the
+logit dumps for the 24 single-class splits, now all scored with `sweep_bipartitions.py
+--subsets singletons`, and the 500 sweep splits, then joins the sweep's metric deltas; all
+21 checks pass. Spec and plan: `docs/superpowers/{specs,plans}/2026-09-*-divided-mass-resemblance*`.
 
-The spec and plan are `docs/superpowers/{specs,plans}/2026-09-*-divided-mass-resemblance*`.
+- **Robust splits** (improvement > 0 on all three sets): there are now **33**, because
+  {building} joined {overhead-bridge} and {gate}; 29 of them contain one of those three.
+- **Mechanism.** A split beats flat when it keeps far more of flat MSP's uncertain OOD points
+  than of its uncertain ID points. At δ = 0.05 every single-class winner has a selectivity of
+  1.8–31 and a divided precision of 10–78 %, against flat's 6–11 %. A clean ratio is
+  necessary, not sufficient: FPR@95 equals the ID divided share at δ95, the depth at which
+  95 % of the OOD points are divided ({bicycle} on Test: δ95 = 9.3e-10, improvement −40.1).
+- **Divided precision is the best single predictor**: ρ 0.87–0.95 with ΔAP and 0.72–0.74 with
+  the improvement at δ = 0.05, 0.79–0.84 at δ = 0.3.
+- **Cetran vs Test: the OOD population shifts.** Test's OOD points lean far less toward
+  truck, gate and bicycle (truck 15.6 → 6.4 %, gate 11.4 → 0.53 %), so truck and bicycle do
+  not transfer and gate weakens (+17.5 → +6.6); overhead-bridge's share grows (11.1 → 18.2 %)
+  and it becomes Test's best split.
+- **Float32 ties.** On 21 / 50 / 43 splits the implemented Group MSP FPR@95 depends on float32
+  rounding, and online also on the bins; the `exact_*` columns hold float32-free values.
 
-```bash
-W=work_dirs/p3former_2xb1_3x_dso_ood_dump
-python tools/sweep_bipartitions.py --backend torch --device cuda:0 $W/logits --subsets singletons --out-dir $W/singletons
-python tools/sweep_bipartitions.py --backend torch --device cuda:1 $W/logits_test --subsets singletons --out-dir $W/singletons_test
-python tools/sweep_bipartitions.py --backend torch --device cuda:0 $W/logits_test $W/logits --subsets singletons --out-dir $W/singletons_test_cetran
-python tools/divided_mass.py --backend torch --device cuda:0        # -> $W/divided_mass/ (~7 min)
-python tools/plot_divided_mass.py && python tools/plot_divided_mass.py --threshold 0.001
-```
+The splits are still selected on the evaluation data, so any split must be confirmed online
+before it is reported.
 
-**Checks** (`summary.md`): all 21 PASS.
-- Flat MSP from the u histograms matches the sweep within 0.004 AUROC, 0.003 AP and 0.15 FPR@95.
-- Group MSP matches the sweep within 0.006 AUROC, 0.052 AP and 0.27 FPR@95 on the 482 / 453 / 460 well-conditioned splits (δ95 ≥ 1e-5).
-- The 21 single-class splits scored by both sweeps agree exactly.
-
-The first run caught two defects before these checks passed: the u histograms were clipped at 0.5, and the float32 effect below.
-
-**Float32 ties in the implemented Group MSP, and the online bins.** The sweep ranks points by the float32 score −max(P_A, P_B), which cannot separate points with m < 2⁻²⁴ ≈ 6e-8. The online metric of `test.py` is coarser still. It puts every score into 2^20 equal-width bins between the scores' minimum and maximum; Group MSP spans about 0.5, so every point with m below ≈ 4.8e-7 falls into one bin.
-- On 21 / 50 / 43 splits, catching 95 % of the OOD points needs a threshold below m ≈ 1e-5. For those splits the implemented FPR@95 depends on float32 rounding, and online also on the binning.
-- For example, {bicycle} on Test reads 89.20 in the sweep, 100 under a float32 emulation, and **80.43 exactly**. The `exact_*` columns hold the float32-free values.
-- {gate} on Test is a robust split with δ95 = 4.0e-7, which lies below the online resolution. Online, its FPR@95 lands near 42 or at 100, depending on where the bins fall, so it cannot be confirmed online as things stand. {gate} on Test + Cetran (δ95 = 7.1e-7) is also affected, but less: an emulation of the online bins from `histograms.npz` gives FPR@95 ≈ 39.5, against 34.0 exact, and it stays robust.
-- The same emulation gives 67.19 for `p_v_hgcno`'s Group MSP FPR@95 on test, not the online 68.02. So the 09-15 entry's attribution of that gap to the online bin limit is unsupported.
-- Scoring Group MSP as log min(P_A, P_B) would fix this, since it ranks identically in exact arithmetic. So would log-spaced online bins.
-
-**Table A — single-class splits at δ = 0.05.** The rows are every class that beats flat on some set, plus {vegetation}.
-- *div*: the % of points divided.
-- *prec*: the share of the divided points that are OOD. Flat MSP's share of *uncertain* points (u ≥ δ) that are OOD is 11.0 / 6.2 / 7.3 % on Cetran / Test / Test + Cetran.
-- *sel*: selectivity, the OOD retention over the ID retention. Retention is the fraction of flat MSP's uncertain points that stay divided.
-- *δ95*: the depth at which 95 % of the OOD points are divided. The ID div there equals the exact FPR@95 (flat MSP: 32.4 / 51.2 / 45.9).
-- *imp*: the improvement.
-
-| set | split | OOD div % | ID div % | prec % | sel | δ95 | ID div % at δ95 | imp |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Cetran | truck | 15.6 | 0.285 | 62.4 | 13.4 | 5.3e-5 | 18.4 | +25.2 |
-| Cetran | gate | 11.4 | 0.099 | 77.8 | 28.2 | 8.7e-6 | 21.7 | +17.5 |
-| Cetran | overhead-bridge | 11.1 | 0.098 | 77.4 | 27.6 | 8.0e-6 | 33.0 | +7.0 |
-| Cetran | bicycle | 1.65 | 0.037 | 57.3 | 10.8 | 1.0e-6 | 28.5 | +5.8 |
-| Cetran | building | 52.3 | 2.80 | 36.2 | 4.6 | 3.2e-4 | 32.1 | +4.3 |
-| Cetran | bus | 1.37 | 0.015 | 73.6 | 22.5 | 4.0e-6 | 31.7 | +0.3 |
-| Cetran | perimeter-barrier | 48.3 | 8.61 | 14.6 | 1.37 | 1.5e-4 | 26.1 | −11.7 |
-| Cetran | vegetation | 33.0 | 7.41 | 11.9 | 1.09 | 1.2e-4 | 58.0 | −40.4 |
-| Test | overhead-bridge | 18.2 | 0.142 | 66.9 | 30.8 | 3.6e-6 | 29.1 | +34.8 |
-| Test | building | 51.4 | 2.56 | 24.0 | 4.8 | 1.5e-4 | 37.4 | +16.3 |
-| Test | gate | 0.53 | 0.072 | 10.3 | 1.76 | 4.0e-7 | 41.5 | +6.6 |
-| Test | perimeter-barrier | 24.6 | 1.52 | 20.4 | 3.9 | 3.3e-5 | 44.6 | +5.5 |
-| Test | truck | 6.42 | 0.254 | 28.5 | 6.1 | 2.8e-6 | 57.9 | −2.9 |
-| Test | bus | 0.81 | 0.096 | 11.8 | 2.04 | 2.9e-7 | 59.8 | −6.1 |
-| Test | vegetation | 38.5 | 12.0 | 4.8 | 0.77 | 3.6e-4 | 70.5 | −28.6 |
-| Test | bicycle | 0.48 | 0.067 | 10.1 | 1.72 | 9.3e-10 | 80.4 | −40.1 |
-| Test + Cetran | overhead-bridge | 15.9 | 0.133 | 69.0 | 28.2 | 4.6e-6 | 28.5 | +27.4 |
-| Test + Cetran | building | 51.7 | 2.61 | 27.0 | 4.7 | 2.0e-4 | 33.8 | +13.3 |
-| Test + Cetran | gate | 4.07 | 0.078 | 49.5 | 12.4 | 7.1e-7 | 34.0 | +10.1 |
-| Test + Cetran | truck | 9.42 | 0.260 | 40.4 | 8.6 | 4.6e-6 | 47.6 | +4.0 |
-| Test + Cetran | perimeter-barrier | 32.3 | 2.94 | 17.1 | 2.6 | 4.8e-5 | 37.4 | +1.2 |
-| Test + Cetran | bus | 0.99 | 0.079 | 19.0 | 2.96 | 4.8e-7 | 53.9 | −7.0 |
-| Test + Cetran | vegetation | 36.7 | 11.0 | 5.8 | 0.78 | 2.6e-4 | 70.3 | −35.8 |
-| Test + Cetran | bicycle | 0.86 | 0.061 | 20.8 | 3.3 | 2.7e-9 | 77.3 | −38.8 |
-
-**Table B — Spearman ρ at δ = 0.05**, over the 24 single-class / all 503 splits. Precision and the log OOD/ID ratio rank the splits nearly identically; they differ only through the +0.5 continuity correction.
-
-| set | prec ~ ΔAP | prec ~ ΔAUROC | prec ~ improvement | OOD div ~ ΔFPR@95 | ID div ~ ΔAP |
-| --- | --- | --- | --- | --- | --- |
-| Cetran | 0.63 / 0.87 | 0.43 / 0.77 | 0.45 / 0.72 | −0.43 / −0.28 | −0.37 / −0.41 |
-| Test | 0.81 / 0.95 | 0.54 / 0.80 | 0.51 / 0.72 | −0.68 / −0.47 | −0.15 / −0.52 |
-| Test + Cetran | 0.82 / 0.95 | 0.62 / 0.80 | 0.53 / 0.74 | −0.66 / −0.44 | −0.26 / −0.52 |
-
-The largest |ρ| with improvement over δ:
-- All splits: precision at δ = 0.3, with 0.79 / 0.80 / 0.84.
-- Single-class splits: precision at δ = 0.3 on Cetran (0.71), and the OOD div % at δ = 1e-3 on Test (0.63) and on Test + Cetran (0.62).
-
-**Table C — robust splits** (improvement > 0 on all three sets). There are now **33**, because {building} joined {overhead-bridge} and {gate}. The table shows the top 10 by worst-set improvement, with the divided shares on Test + Cetran at δ = 0.05; flat MSP's precision there is 7.3 %.
-
-| split | classes (A) | imp. Cetran / Test / T+C | OOD div % | ID div % | prec % |
-| --- | --- | --- | --- | --- | --- |
-| `s0.1.3.5.10.16` | car, bicycle, truck, person, unpaved-road, overhead-bridge | +17.9 / +19.0 / +18.7 | 27.7 | 0.57 | 47.5 |
-| `s2.3.4.5.6.16` | motorcycle, truck, bus, person, rider, overhead-bridge | +16.9 / +22.2 / +21.0 | 26.4 | 0.50 | 49.5 |
-| `s0.2.5.16.17.18.19` | car, motorcycle, person, overhead-bridge, gate, pole-like-object, drain | +19.7 / +15.1 / +17.3 | 28.6 | 0.74 | 41.8 |
-| `s2.3.10.12.17.18.19` | motorcycle, truck, unpaved-road, building, gate, pole-like-object, drain | +14.5 / +19.4 / +18.0 | 58.8 | 3.23 | 25.4 |
-| `s10.12.17.18.19` | unpaved-road, building, gate, pole-like-object, drain | +12.4 / +20.1 / +17.9 | 56.5 | 2.99 | 26.1 |
-| `s0.1.2.3.4.6.7.10.16.17.18` | car, bicycle, motorcycle, truck, bus, rider, traffic-sign, unpaved-road, overhead-bridge, gate, pole-like-object | +21.9 / +12.3 / +14.8 | 36.0 | 0.76 | 46.8 |
-| `s3.16.18` | truck, overhead-bridge, pole-like-object | +14.9 / +12.2 / +12.7 | 28.5 | 0.54 | 49.7 |
-| `s7.13.16.17.23` | traffic-sign, window, overhead-bridge, gate, obscurant | +11.8 / +12.0 / +12.2 | 25.8 | 0.75 | 39.1 |
-| `s10.12.17.19` | unpaved-road, building, gate, drain | +10.8 / +21.9 / +18.3 | 55.2 | 2.83 | 26.7 |
-| `s2.16` | motorcycle, overhead-bridge | +10.0 / +32.0 / +26.2 | 16.2 | 0.19 | 61.9 |
-
-29 of the 33 contain overhead-bridge, gate or building. 29 contain at least one class that has **no ID point in Cetran**.
-
-**Figures** (in `$W/divided_mass/`):
-- `bubble_singletons_0.05` and `bubble_singletons_0.001`: ID vs OOD divided share of the 24 single-class splits, with flat MSP's star and its iso-ratio line;
-- `bubble_robust_0.05`: the robust splits over the grey sweep, with the top 8 numbered and keyed;
-- `rho_vs_threshold`: the ρ of each statistic against each metric delta, over δ.
-
-**Reading.**
-- **Mechanism.** Group MSP flags only divided points, so a split trades OOD uncertainty for ID uncertainty. It beats flat when it keeps much more of flat MSP's uncertain OOD points than of its uncertain ID points.
-  - At δ = 0.05 every single-class winner does: selectivity 1.8–31 and precision 10–78 %, against flat's 6–11 %.
-  - The strong winners (improvement > +10) reach a selectivity of 4.7–31 and a precision of 24–78 %.
-  - {vegetation} is the clearest loser, with a selectivity of 0.77–1.09: it absorbs OOD uncertainty as fast as ID uncertainty.
-- **A clean ratio is necessary, not sufficient.** Necessary: among all 503 splits, no split with improvement > 0 has a selectivity below 1 at δ = 0.05, on any set. Not sufficient: several losers also have a clean ratio, such as {bicycle} and {bus} on Test (selectivity 1.7–2.0), but they divide under 1 % of the OOD points. FPR@95 is decided by the depth δ95, because the ID divided share there *is* the exact FPR@95.
-  - {gate} and {bicycle} on Test look alike at δ = 0.05: OOD div 0.53 vs 0.48 %, precision 10.3 vs 10.1 %.
-  - Their depths differ 400-fold: δ95 = 4.0e-7 vs 9.3e-10. The other 99.5 % of the OOD points are confidently non-bicycle.
-  - So their ID div at δ95 is 41.5 vs 80.4 %, against flat's 51.2, and their improvements are +6.6 vs −40.1.
-- **Which statistic predicts what.**
-  - Divided precision (the absolute-count view) is the best single predictor over all splits. At δ = 0.05, ρ is 0.87–0.95 with ΔAP and 0.72–0.74 with improvement, rising to 0.79–0.84 at δ = 0.3 (`rho_vs_threshold`).
-  - The ID divided % alone is a weak, negative predictor.
-  - Over the single-class splits, the OOD divided share tracks ΔFPR@95, with ρ −0.43 / −0.68 / −0.66.
-- **Robust splits come in two kinds** (Table C). Both reach a divided precision 3.5–8.5× flat's.
-  - Splits led by overhead-bridge divide about 16–36 % of the OOD points at an ID cost of only 0.2–0.8 %, with a precision of 39–62 %.
-  - Splits built on building, gate and drain divide 55–59 % of the OOD points at an ID cost of 2.8–3.2 %, with a precision of about 26 %.
-- **Cetran vs Test: the OOD population shifts.**
-  - Cetran's best single-class splits are truck, gate, overhead-bridge and bicycle. Their ID divided share is tiny on both sets: truck 0.29 → 0.25 %, gate 0.10 → 0.07 %, bicycle 0.04 → 0.07 %. On Cetran that is because it has no ID point of these classes; on Test it holds even though those ID points exist.
-  - What changes is the OOD side. Test's OOD points lean toward these classes far less: truck 15.6 → 6.4 %, gate 11.4 → 0.53 %, bicycle 1.65 → 0.48 %. The ID:OOD ratio also doubles, from 33× to 63×.
-  - So truck and bicycle do not transfer, and gate weakens from +17.5 to +6.6. Overhead-bridge's OOD share grows (11.1 → 18.2 %), and it becomes the best split on Test.
-  - This is the poor transfer noted on 2026-09-15: a split picked on Cetran is tuned to Cetran's OOD objects.
-
-**Caveat.** Divided shares are ROC operating points of Group MSP, so their link to the metric deltas is partly by construction. The explanation rests on the comparison with flat MSP (selectivity, precision) and on δ95. The splits are still selected on the evaluation data, so any split must be confirmed online before it is reported.
+Full record (commands, checks, float32 analysis, Tables A–C, figures, reading): [docs/experiments/2026-09-30-divided-mass.md](docs/experiments/2026-09-30-divided-mass.md)
 
 ## 2026-09-30 — Do the best splits group the classes the OOD points resemble? (feature space)
 
-The question from 09-29: which ID classes do the OOD points look like in the features the classifier reads? And does the best split "put the classes that the OOD objects resemble on one side and everything else on the other", as the 09-15 reading suggested?
+Which ID classes do the OOD points look like in `pe_features`, the 256-d input of the
+semantic classifier, and in its "appearance" part without the positional embedding? And
+does the best split put those classes on one side, as the 09-15 reading suggested?
+`tools/extract_point_features.py` samples the features (Cetran 1.25 M, Test 3.0 M samples);
+`tools/ood_class_resemblance.py` runs a cosine kNN (k = 10) against a class-balanced ID
+bank, where r_OOD(c) is class c's share of the OOD points' neighbours (4.17 % = no
+preference). Re-run on 2026-10-04 after a sampling fix (`84521b0`), with seeds 1 and 2 as a
+noise check; no conclusion changed.
 
-*Re-run 2026-10-04 after a sampling fix (`84521b0`).* The kNN bank and the ID queries are now two halves of one shuffled weighted draw. Before, the queries took the low-weight leftovers of the draw, which inflated the ID feature-divided shares by about 0.5 point on Test (0.18–0.76 over seeds 0–2) and not measurably on the other sets. No conclusion changed. Seeds 1 and 2 were added as a noise check.
+- **The OOD points resemble structures**: building, perimeter-barrier and gate on Test (26 /
+  16 / 9 %); gate, perimeter-barrier and person on Cetran against the full bank.
+- **Class level: resemblance matches the winning splits.** ρ(r_OOD, improvement) is 0.76 /
+  0.58 / 0.61 on Test / Test + Cetran / Cetran (full bank), 0.92 / 0.79 / 0.69 in the
+  appearance space. Overhead-bridge is the exception: the best split on Test, yet r_OOD only
+  1.4 %, because the positional part of `pe_features` hides the resemblance from the kNN.
+- **Split level: the literal hypothesis gets mixed support.** Grouping the most-resembled
+  classes on the small side is about as good as separating them on Test; lumping them with
+  everything else hurts (median improvement −18 to −25).
+- **Refined:** the best split cuts *through* the OOD points' neighbourhoods. The "cut
+  through" log ratio predicts the improvement on every set (ρ 0.48–0.70), less well than
+  the divided precision of the entry above (0.72–0.84).
 
-**Features.** `pe_features` is the 256-d per-point input of the semantic classifier (`sem_preds = pe_features @ sem_queriesᵀ`, bias-free). "Appearance" is `pe_features` minus the positional embedding added just before it. `tools/extract_point_features.py` captures both by wrapping `_P3FormerHead.init_inputs` on the model instance.
-- Per frame it keeps up to 64 ID points per class and 512 OOD points, each weighted to its (frame, class) stratum.
-- Cetran: 980 frames, 1,252,847 samples, 501,760 of them OOD. Test: 2,625 frames, 2,995,232 samples, 1,034,359 OOD.
-- Checks: the captured features reproduce the classifier's logits (`feat @ W^T` in float64) within 0.0073 / 0.0077. At the sampled points, the run's logits, labels and OOD flags equal those of the logit dumps; the largest logit difference is 0.0.
+Caveats: correlational only, over splits selected on the evaluation data; seed noise in ρ
+reaches 0.12 at the class level and 0.03 at the split level.
 
-**Measure** (`tools/ood_class_resemblance.py`): a cosine kNN (k = 10) against a class-balanced bank of ID samples. Per class, one weighted draw (∝ sample weight) is shuffled and split into the bank (up to 4,000) and disjoint ID queries (up to 2,000).
-- r_OOD(c) is the share of class c among the OOD points' neighbours; 4.17 % means no preference.
-- r_ID(c) is the same share around the ID points of the other classes, and contrast = r_OOD / r_ID.
-- Per split A | B, with A the smaller group:
-  - R_A = Σ r_OOD(c) over the measured classes of A, and E_A = R_A over its no-preference value ("together": the neighbours fall in A);
-  - *feature-divided*: the k neighbours hold classes of both sides ("cut through"), with its log OOD/ID ratio;
-  - the *literal* test: the splits grouped by where the k most-resembled classes sit.
-- **Cetran has no ID point of 10 classes**: bicycle, motorcycle, truck, rider, unpaved-road, window, overhead-bridge, gate, drain and obscurant. Against its own bank (the default) they cannot be measured, so they are reported as NaN; that includes truck and gate, its two best splits. `--reference test_cetran` measures every set's OOD points against the Test + Cetran bank instead.
-
-```bash
-W=work_dirs/p3former_2xb1_3x_dso_ood_dump; CFG=configs/p3former/p3former_2xb1_3x_dso_ood.py; CKPT=work_dirs/p3former_2xb1_3x_dso/epoch_36.pth
-python tools/extract_point_features.py $CFG $CKPT --ann dso_infos_cetran.pkl --out-dir $W/features_cetran --check-dump $W/logits     # ~6 min, GPU
-python tools/extract_point_features.py $CFG $CKPT --ann dso_infos_test.pkl --out-dir $W/features_test --check-dump $W/logits_test  # ~7 min
-python tools/ood_class_resemblance.py --device cuda:0                                               # -> $W/resemblance/ (~1.5 min)
-python tools/ood_class_resemblance.py --device cuda:0 --seed 1 --out-dir $W/resemblance_seed1      # and --seed 2 -> resemblance_seed2
-python tools/ood_class_resemblance.py --device cuda:0 --k 50 --out-dir $W/resemblance_k50
-python tools/ood_class_resemblance.py --device cuda:0 --reference test_cetran --out-dir $W/resemblance_xref
-python tools/plot_ood_class_resemblance.py [$W/resemblance_xref] [--space appearance]
-python tools/plot_feature_tsne.py [--space appearance]
-```
-
-**Table A — what the OOD points resemble**: the top 8 by r_OOD (full space), as r_OOD % / r_ID %, with the improvement of {c} | rest in brackets.
-
-| rank | Cetran, own bank | Cetran, T+C bank | Test | Test + Cetran |
-| --- | --- | --- | --- | --- |
-| 1 | person 31.5 / 0.16 (−7.1) | gate 29.1 / 0.88 (+17.5) | building 26.0 / 0.61 (+16.3) | building 19.3 / 0.47 (+13.3) |
-| 2 | perimeter-barrier 26.6 / 1.05 (−11.7) | perimeter-barrier 16.3 / 1.74 (−11.7) | perimeter-barrier 15.6 / 3.18 (+5.5) | gate 16.5 / 0.88 (+10.1) |
-| 3 | other-barrier 11.6 / 1.41 (−13.8) | person 12.1 / 0.10 (−7.1) | gate 9.0 / 0.73 (+6.6) | perimeter-barrier 13.4 / 1.74 (+1.2) |
-| 4 | building 7.8 / 0.30 (+4.3) | other-barrier 7.7 / 0.82 (−13.8) | other-barrier 5.2 / 0.94 (−1.3) | person 6.0 / 0.10 (−46.7) |
-| 5 | terrain 5.6 / 0.93 (−52.4) | truck 5.1 / 0.19 (+25.2) | sidewalk 4.3 / 1.01 (−23.5) | other-barrier 5.8 / 0.82 (−5.2) |
-| 6 | pole-like-object 3.3 / 0.14 (−18.0) | sidewalk 4.4 / 2.52 (−52.2) | traffic-sign 4.2 / 0.29 (−9.1) | sidewalk 4.1 / 2.52 (−29.9) |
-| 7 | sidewalk 2.9 / 10.05 (−52.2) | building 4.4 / 0.47 (+4.3) | drain 4.2 / 0.99 (−24.2) | bus 3.4 / 0.08 (−7.0) |
-| 8 | traffic-cone 2.7 / 0.30 (−29.6) | traffic-sign 3.9 / 0.19 (−5.2) | bus 4.1 / 0.08 (−6.1) | trunks 3.3 / 8.32 (−43.7) |
-
-**Table B — class level**: Spearman ρ over the classes, full / appearance space. For Cetran with its own bank, ρ is over the 14 measured classes.
-
-| run | set | r_OOD ~ improvement | r_OOD ~ OOD div % | contrast ~ improvement |
-| --- | --- | --- | --- | --- |
-| k = 10 | Cetran (own bank) | 0.34 / 0.51 | 0.24 / 0.24 | 0.75 / 0.83 |
-| k = 10 | Cetran (T+C bank) | 0.61 / 0.69 | 0.30 / 0.33 | 0.70 / 0.73 |
-| k = 10 | Test | 0.76 / 0.92 | 0.62 / 0.64 | 0.24 / 0.28 |
-| k = 10 | Test + Cetran | 0.58 / 0.79 | 0.53 / 0.54 | 0.28 / 0.35 |
-| k = 50 | Cetran (own bank) | 0.32 / 0.47 | 0.31 / 0.23 | 0.67 / 0.85 |
-| k = 50 | Test | 0.73 / 0.91 | 0.61 / 0.63 | 0.22 / 0.30 |
-| k = 50 | Test + Cetran | 0.61 / 0.80 | 0.53 / 0.52 | 0.35 / 0.37 |
-
-**Table C — split level**: ρ with the improvement over all 503 splits, full / appearance.
-
-| set | together: R_A | together: E_A | cut through: OOD feature-divided | cut through: log ratio |
-| --- | --- | --- | --- | --- |
-| Cetran (own bank) | 0.19 / 0.24 | 0.23 / 0.31 | 0.05 / 0.21 | 0.62 / 0.70 |
-| Cetran (T+C bank) | 0.34 / 0.36 | 0.38 / 0.42 | 0.36 / 0.38 | 0.60 / 0.63 |
-| Test | 0.42 / 0.47 | 0.48 / 0.59 | 0.33 / 0.42 | 0.48 / 0.53 |
-| Test + Cetran | 0.40 / 0.44 | 0.47 / 0.55 | 0.34 / 0.42 | 0.60 / 0.64 |
-
-**Seed noise** (seeds 0–2, k = 10, full / appearance):
-- ρ(r_OOD, improvement) spans 0.73–0.76 / 0.90–0.92 on Test, 0.58–0.61 / 0.79–0.81 on Test + Cetran, and 0.29–0.34 / 0.43–0.53 on Cetran's own bank.
-- The contrast moves most, by up to 0.12.
-- The split-level E_A and log-ratio ρ move by at most 0.03.
-- The top three classes are the same for every seed.
-
-**Literal reading** (`placement.tsv`, full space): the splits grouped by where the 2 (3) most-resembled classes sit. Each cell gives the median improvement, the % of splits with improvement > 0, and n.
-
-| set | classes | small side (all in A) | large side (all in B) | apart |
-| --- | --- | --- | --- | --- |
-| Cetran (own bank) | person, perimeter-barrier | −12.3, 2 % (n = 41) | −15.7, 17 % (276) | −12.7, 8 % (186) |
-| Cetran (T+C bank) | gate, perimeter-barrier | −15.45, 0 % (n = 44) | −20.4, 11 % (265) | −10.4, 16 % (194) |
-| Test | building, perimeter-barrier | −2.7, 45 % (40) | −18.3, 12 % (269) | −2.8, 45 % (194) |
-| Test | + gate | −5.8, 33 % (12) | −21.5, 11 % (194) | −4.5, 37 % (297) |
-| Test + Cetran | building, gate | −2.6, 29 % (41) | −18.3, 15 % (256) | −7.3, 24 % (206) |
-| Test + Cetran | + perimeter-barrier | −11.6, 0 % (12) | −25.1, 9 % (194) | −6.1, 28 % (297) |
-
-**Table D — the Part 1 robust splits in the features** (Test + Cetran, full space; the log ratio in the appearance space in brackets).
-
-| split | R_A % | E_A | OOD feat-div % | ID feat-div % | log ratio | imp |
-| --- | --- | --- | --- | --- | --- | --- |
-| `s0.1.3.5.10.16` | 14.4 | 0.58 | 33.4 | 16.1 | 0.32 (0.45) | +18.7 |
-| `s2.3.4.5.6.16` | 15.3 | 0.61 | 33.6 | 4.5 | 0.88 (1.08) | +21.0 |
-| `s0.2.5.16.17.18.19` | 30.3 | 1.04 | 57.9 | 13.9 | 0.62 (0.68) | +17.3 |
-| `s2.3.10.12.17.18.19` | 46.2 | 1.58 | 68.1 | 27.2 | 0.40 (0.41) | +18.0 |
-| `s10.12.17.18.19` | 42.2 | 2.03 | 66.3 | 26.5 | 0.40 (0.41) | +17.9 |
-| `s0.1.2.3.4.6.7.10.16.17.18` | 35.0 | 0.76 | 64.1 | 22.2 | 0.46 (0.47) | +14.8 |
-| `s3.16.18` | 6.2 | 0.49 | 17.5 | 5.2 | 0.53 (0.90) | +12.7 |
-| `s7.13.16.17.23` | 24.4 | 1.17 | 54.0 | 12.0 | 0.65 (0.74) | +12.2 |
-| `s10.12.17.19` | 40.3 | 2.42 | 64.2 | 24.4 | 0.42 (0.41) | +18.3 |
-| `s2.16` | 2.3 | 0.28 | 6.4 | 3.0 | 0.33 (0.84) | +26.2 |
-
-**Figures** (`$W/resemblance/`, and the same names in `$W/resemblance_xref/`):
-- `profile_{full,appearance}`: r_OOD and r_ID per class, with the appearance-space r_OOD as rings;
-- `bubble_feature_singletons_{full,appearance}`: OOD vs ID feature-divided share of the single-class splits;
-- `hypothesis_{full,appearance}`: improvement against R_A, the OOD feature-divided share and the log ratio;
-- `tsne_{full,appearance}`, in `$W/resemblance/` only: t-SNE of the feature samples, with one fixed colour per class and OOD in black.
-
-**Reading.**
-- **What the OOD points resemble: mostly structures.**
-  - On Test: building (26 %), perimeter-barrier (16 %) and gate (9 %).
-  - On Test + Cetran: building, gate and perimeter-barrier (19 / 17 / 13 %).
-  - On Cetran against the full bank: gate leads (29 %), then perimeter-barrier and person (16 / 12 %). Truck is fifth (5.1 %), with a contrast of 28.
-
-  The resemblance is spread: the top class takes 19–31 % of the neighbours, and the top three about half to 70 %.
-- **At the class level, resemblance matches the winning splits, with one exception.**
-  - On Test, the three most-resembled classes are exactly the three positive single-class splits besides overhead-bridge.
-  - Over the classes, ρ(r_OOD, improvement) is 0.76 on Test, 0.58 on Test + Cetran and 0.61 on Cetran with the full bank. It is only 0.34 over Cetran's own 14 measured classes, which lack truck and gate.
-  - r_OOD also tracks Part 1's OOD divided share (ρ 0.62 / 0.53 / 0.30): OOD points that neighbour class c in the features also carry classifier mass on c.
-  - **Overhead-bridge is the exception.** It is the best split on Test and Test + Cetran (+34.8 / +27.4), yet its r_OOD is only 1.4 %, below no preference. In the appearance space it rises to 6.0 %, and 22 % of the OOD points are feature-divided on it, against 2.6 % of the ID points. So the positional part of `pe_features` hides this resemblance from the kNN, while the linear classifier still puts overhead-bridge mass on 18 % of the OOD points (Part 1).
-- **The appearance space**, without the positional embedding, strengthens the class-level alignment with the improvement: ρ(r_OOD, improvement) is 0.92 / 0.79 / 0.69 on Test / Test + Cetran / Cetran (full bank), against 0.76 / 0.58 / 0.61. The top classes stay the same.
-- **At the split level, the literal hypothesis gets mixed support.**
-  - Putting the two or three most-resembled classes together on the small side is about as good as separating them on Test (45 vs 45 % of the splits positive). On Test + Cetran it is better for the top two (29 vs 24 %) but worse for the top three (0 vs 28 %). On Cetran it is worse for the top two (0–2 vs 8–16 %) and mixed for the top three (0–7 vs 6–13 %).
-  - What consistently hurts on Test and Test + Cetran is lumping those classes with everything else: the large side has a median improvement of −18 to −25.
-  - An example from Test: {overhead-bridge} scores +34.8 and {building} +16.3, but {building, overhead-bridge} only +14.3, although its E_A (3.3) is ten times {overhead-bridge}'s (0.34).
-  - Over all splits, "together" (E_A) predicts as well as the "cut through" log ratio on Test and Test + Cetran (0.47–0.59 against 0.48–0.64). On Cetran it is weak (0.23 with its own bank, 0.38 with the full bank), while the log ratio holds (0.62 / 0.60). The log ratio is the more consistent predictor: ρ 0.48–0.70 on every set, in both spaces and with either bank.
-  - The top robust splits (Table D) have E_A from 0.28 to 2.4, so "togetherness" is not what they share. Their OOD points are feature-divided 2–7.5× more often than their ID points. Over all 33 robust splits on Test + Cetran, the median log ratio is 0.62, against 0.23 for the other splits, though it goes down to 0.11.
-- **The hypothesis, refined.** The best split cuts *through* the OOD points' neighbourhoods. It puts one (or a few) of the classes the OOD points lean toward against the rest. The OOD mass, spread over several resembled classes, then straddles the boundary, while each ID class's usual confusers stay on its own side. This is Part 1's divided precision seen from the features. The feature ratio ranks the splits less well than the logit-space precision does (ρ 0.48–0.70 vs 0.72–0.84), so the neighbourhoods explain part of the effect, not all of it.
-- **k = 50.** The r_OOD ranking barely moves: its rank ρ with k = 10 is 0.955–0.991.
-  - The top three classes are the same on Test and Test + Cetran in both spaces, and on Cetran's own bank in the full space.
-  - In Cetran's appearance space the third class changes, from building to other-barrier.
-  - The headline ρ of Tables B and C move by at most 0.08. At the class level that is about the seed noise; at the split level it is up to twice the noise.
-- **t-SNE** (`tsne_{full,appearance}`; 300 ID points per class and 1,000 OOD points per set). This view is qualitative: t-SNE keeps neighbourhoods, not distances.
-  - In the appearance space, the ID classes form clean clusters. The OOD points gather in a region of their own, which borders building, window, perimeter-barrier, gate and other-barrier on Test and Test + Cetran, and perimeter-barrier, other-barrier and person on Cetran. This is the kNN picture of Table A.
-  - In the full space, position splits every class into several clusters, and the OOD points spread among them, mostly next to the barriers, building and window. On Cetran, the Stop points form small tight clusters of their own.
-- **Caveats.**
-  - The test is correlational only, over splits selected on the evaluation data.
-  - The kNN reads neighbourhoods, while the classifier is linear on the same features, and overhead-bridge shows the two can disagree.
-  - Cetran's own-bank numbers cover only its 14 measured classes.
-  - Differences in ρ smaller than the seed noise (up to 0.12 at the class level, 0.03 at the split level) are not meaningful.
+Full record (method, commands, Tables A–D, seed and k = 50 checks, figures, t-SNE): [docs/experiments/2026-09-30-ood-resemblance.md](docs/experiments/2026-09-30-ood-resemblance.md)
