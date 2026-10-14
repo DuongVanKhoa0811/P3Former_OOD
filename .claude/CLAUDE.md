@@ -61,7 +61,7 @@ Numbers are AUROC / AP / FPR@95 in %. The dates in brackets are the `DOCs.md` en
   | A | worse | worse | worse |
   | C | worse | worse | worse |
 
-- **Log.** The `DOCs.md` entry of 2026-10-10 holds the commands, the per-set tables, C's per-seed PQ / mIoU and the dead-dimension check.
+- **Log.** The `DOCs.md` entry of 2026-10-10 summarizes the result. Its full record (commands, per-set tables, C's per-seed PQ / mIoU, the dead-dimension check) is `docs/experiments/2026-10-10-occuq-density.md`.
 
 ### Key decisions and how they were handled
 
