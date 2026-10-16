@@ -15,9 +15,16 @@ from tools.compare_occuq_grouping import (SWEEP_DIRS, compare,  # noqa: E402
 
 FLAT_ROWS = {'msp': (88.0, 18.0, 45.0), 'energy': (93.0, 36.0, 38.0),
              'entropy': (89.0, 27.0, 44.0)}  # R = (90.0, 27.0, 42.33)
-SPLITS = {  # group_msp, group_energy, group_entropy
-    'sA': ((93.0, 40.0, 30.0), (93.0, 36.0, 38.0), (93.0, 40.0, 30.0)),
-    'sB': ((91.0, 30.0, 40.0), (93.0, 36.0, 38.0), (91.0, 30.0, 40.0)),
+# the five flat rows of the base model's runs (pe, and A's frozen model)
+RUN_FLAT = dict(FLAT_ROWS, maxlogit=(93.0, 38.0, 37.0), odin=(91.0, 31.0, 41.0))
+C_FLAT = {'msp': (89.0, 19.0, 44.0), 'maxlogit': (94.0, 39.0, 36.0),
+          'odin': (92.0, 32.0, 40.0), 'energy': (94.0, 37.0, 37.0),
+          'entropy': (90.0, 28.0, 43.0)}  # C's fine-tuned model
+SPLITS = {  # group_msp, group_energy, group_entropy; the best split is last
+    # I = 6.33, 13.33, 6.33: best group_energy
+    'sB': ((91.0, 30.0, 40.0), (92.0, 35.0, 39.0), (91.0, 30.0, 40.0)),
+    # I = 27.33, 16.33, 28.33: best group_entropy, averaged 24.00
+    'sA': ((93.0, 39.0, 30.0), (93.0, 36.0, 38.0), (93.0, 40.0, 30.0)),
 }
 GROUP_KEYS = ('group_msp', 'group_energy', 'group_entropy')
 PREFIX = '2026/10/07 12:00:00 - mmengine - INFO - '
@@ -32,15 +39,15 @@ def _write_log(path, rows, prefix='', extra=''):
         fh.write(extra)
 
 
-def _run(run_dir, set_name, key, density, pq=0.4619):
-    rows = dict(FLAT_ROWS, **{key: density})
+def _run(run_dir, set_name, key, density, pq=0.4619, flat=RUN_FLAT):
+    rows = dict(flat, **{key: density})
     extra = (f'{PREFIX}Epoch(test) [10/10]    pq: {pq:.4f}  '
              'pq_dagger: 0.5000  miou: 0.4794\n')
     _write_log(os.path.join(run_dir, set_name, '20261007_120000',
                             '20261007_120000.log'), rows, PREFIX, extra)
 
 
-def _layout(tmp, tsv_improvement=None):
+def _layout(tmp, tsv_improvement=None, pe_flat=RUN_FLAT):
     grouping = os.path.join(tmp, 'dump')
     ref = reference(FLAT_ROWS, 'synthetic')
     header = ('name\tsize_A\tgroup_A\timprovement_cetran\timprovement_test\t'
@@ -65,11 +72,13 @@ def _layout(tmp, tsv_improvement=None):
     a_dirs = [os.path.join(tmp, f'a{s}') for s in range(3)]
     c_dirs = [os.path.join(tmp, f'c{s}') for s in range(3)]
     for set_name in SWEEP_DIRS:
-        _run(pe, set_name, 'density_pe', (92.0, 30.0, 40.0))  # I = 7.33
+        _run(pe, set_name, 'density_pe', (92.0, 30.0, 40.0),  # I = 7.33
+             flat=pe_flat)
         for d, auroc in zip(a_dirs, (94.0, 93.5, 94.5)):  # I = 31.0 +- 0.5
             _run(d, set_name, 'density', (auroc, 40.0, 28.33))
         for d, auroc in zip(c_dirs, (93.5, 92.5, 93.0)):  # around 28.33
-            _run(d, set_name, 'density', (auroc, 40.0, 30.0), pq=0.4500)
+            _run(d, set_name, 'density', (auroc, 40.0, 30.0), pq=0.4500,
+                 flat=C_FLAT)
     return grouping, pe, a_dirs, c_dirs
 
 
@@ -125,9 +134,49 @@ def test_compare_end_to_end():
     assert '| pe | worse | worse | worse |' in report
     assert '| A | better | better | better |' in report
     assert '| C | too close to call | too close to call | too close to call |' in report
-    assert '`sA` (group_msp)' in report
     assert 'PQ 45.00' in report and 'base model PQ 46.19' in report
+    assert 'own flat Energy 94.00 | 37.00 | 37.00' in report
     print('PASS test_compare_end_to_end')
+
+
+def test_compare_lists_every_flat_score_of_the_base_model():
+    # R = (90.0, 27.0, 42.33); the splits' values are sA 28.33 and sB 13.33
+    with tempfile.TemporaryDirectory() as tmp:
+        report = compare(*_layout(tmp))
+    for row in (
+            '| flat MSP (base model) | 88.00 | 18.00 | 45.00 | -13.67 | | 0/2 | |',
+            '| flat MaxLogit (base model) | 93.00 | 38.00 | 37.00 | 19.33 | | 1/2 | |',
+            '| flat ODIN (base model) | 91.00 | 31.00 | 41.00 | 6.33 | | 0/2 | |',
+            '| flat Energy (base model) | 93.00 | 36.00 | 38.00 | 16.33 | | 1/2 | |',
+            '| flat Entropy (base model) | 89.00 | 27.00 | 44.00 | -2.67 | | 0/2 | |'):
+        assert report.count(row) == 3, row  # once per set
+    print('PASS test_compare_lists_every_flat_score_of_the_base_model')
+
+
+def test_compare_lists_the_three_group_scores_of_the_best_split():
+    # sA is the best split (28.33 > 13.33); its averaged improvement is the
+    # mean of its three I, (27.33 + 16.33 + 28.33) / 3 = 24.00
+    with tempfile.TemporaryDirectory() as tmp:
+        report = compare(*_layout(tmp))
+    for row in (
+            '| best robust split `sA`: group_msp | 93.00 | 39.00 | 30.00 | 27.33 | 24.00 | | |',
+            '| best robust split `sA`: group_energy | 93.00 | 36.00 | 38.00 | 16.33 | 24.00 | | |',
+            '| best robust split `sA`: group_entropy (best) | 93.00 | 40.00 | 30.00 | 28.33 | 24.00 | | |'):
+        assert report.count(row) == 3, row  # once per set
+    assert '`sB`' not in report
+    print('PASS test_compare_lists_the_three_group_scores_of_the_best_split')
+
+
+def test_compare_rejects_a_run_without_a_flat_row():
+    pe_flat = {k: m for k, m in RUN_FLAT.items() if k != 'odin'}
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            compare(*_layout(tmp, pe_flat=pe_flat))
+        except KeyError as err:
+            assert 'odin' in str(err)
+        else:
+            raise AssertionError('a run log without the odin row was accepted')
+    print('PASS test_compare_rejects_a_run_without_a_flat_row')
 
 
 def test_compare_rejects_a_robust_tsv_mismatch():
@@ -147,5 +196,8 @@ if __name__ == '__main__':
     test_verdict_rule()
     test_merge_rows_rejects_conflicts()
     test_compare_end_to_end()
+    test_compare_lists_every_flat_score_of_the_base_model()
+    test_compare_lists_the_three_group_scores_of_the_best_split()
+    test_compare_rejects_a_run_without_a_flat_row()
     test_compare_rejects_a_robust_tsv_mismatch()
     print('ALL TESTS PASSED')

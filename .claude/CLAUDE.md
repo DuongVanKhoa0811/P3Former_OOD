@@ -48,7 +48,7 @@ Numbers are AUROC / AP / FPR@95 in %. The dates in brackets are the `DOCs.md` en
 | Component | Status |
 | --- | --- |
 | Trained models | `work_dirs/p3former_2xb1_3x_{dso,semantickitti}/epoch_36.pth`. DSO test PQ 46.50, mIoU 48.66. SemanticKITTI val PQ 60.32, against 62.63 for the official checkpoint. |
-| Online OOD scoring and metric | Complete; the flat branch's 39 tests pass (the suite has 81 on this branch). Energy is the best flat score on DSO test + Cetran, 92.88 / 35.55 / 37.94. On SemanticKITTI val with the 2xb1 checkpoint, ODIN is best, 91.46 / 26.94 / 38.33. |
+| Online OOD scoring and metric | Complete; the flat branch's 39 tests pass (the suite has 84 on this branch). Energy is the best flat score on DSO test + Cetran, 92.88 / 35.55 / 37.94. On SemanticKITTI val with the 2xb1 checkpoint, ODIN is best, 91.46 / 26.94 / 38.33. |
 
 ### OCCUQ (done 2026-10-10)
 

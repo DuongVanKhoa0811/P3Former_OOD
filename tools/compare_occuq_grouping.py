@@ -14,7 +14,9 @@ flat rows (the pe runs) for every OCCUQ variant.
 
 A split counts with its best single Group score (like-for-like).
 robust.tsv's averaged improvement is shown alongside and must be reproduced
-by the rows. Verdict per variant and set, against the best split:
+by the rows. Each set's table lists the base model's five flat scores, the
+best split's three Group scores (its best one marked) and the OCCUQ
+variants. Verdict per variant and set, against the best split:
 - better if every run is above it;
 - worse if every run is below it;
 - too close to call otherwise.
@@ -46,7 +48,9 @@ SWEEP_DIRS = {
     'test': ('bipartitions_test', 'singletons_test'),
     'test_cetran': ('bipartitions_test_cetran', 'singletons_test_cetran'),
 }
-FLAT = ('msp', 'energy', 'entropy')
+FLAT = ('msp', 'energy', 'entropy')  # R is their mean
+FLAT_SCORES = {'msp': 'MSP', 'maxlogit': 'MaxLogit', 'odin': 'ODIN',
+               'energy': 'Energy', 'entropy': 'Entropy'}  # the flat rows shown
 GROUP_SCORES = ('group_msp', 'group_energy', 'group_entropy')
 NUMBER = r'(-?\d+(?:\.\d+)?)'
 # a name starting with a letter, so the numeric rows the panoptic metric
@@ -103,9 +107,9 @@ def read_robust(path: str) -> List[Dict[str, str]]:
 
 
 def grouping_table(robust, rows, set_name) -> List[Dict]:
-    """Per robust split on ``set_name``: its best single Group score and
-    like-for-like value, and robust.tsv's averaged improvement, which the
-    rows must reproduce."""
+    """Per robust split on ``set_name``: its three Group scores and their
+    like-for-like values, its best score, and robust.tsv's averaged
+    improvement, which the rows must reproduce."""
     ref = reference(rows, f'the sweep logs of {set_name}')
     table = []
     for split in robust:
@@ -125,8 +129,9 @@ def grouping_table(robust, rows, set_name) -> List[Dict]:
                              f'averaged improvement of {averaged:.4f}, '
                              f'robust.tsv {logged:.4f}')
         best = max(values, key=values.get)
-        table.append(dict(name=name, best_score=best, metrics=scores[best],
-                          value=values[best], averaged=logged))
+        table.append(dict(name=name, scores=scores, values=values,
+                          best_score=best, value=values[best],
+                          averaged=logged))
     return table
 
 
@@ -146,19 +151,21 @@ def find_log(run_dir: str, set_name: str) -> str:
 
 
 def occuq_run(run_dir: str, set_name: str, key: str) -> Dict:
-    """One OCCUQ evaluation: its density row, flat Energy row, flat
+    """One OCCUQ evaluation: its density row, its five flat rows, the flat
     reference, and PQ and mIoU in %."""
     path = find_log(run_dir, set_name)
     rows = parse_rows(path)
-    if key not in rows:
-        raise KeyError(f'the {key} row is missing in {path}')
+    missing = [k for k in (key, *FLAT_SCORES) if k not in rows]
+    if missing:
+        raise KeyError(f'rows {missing} are missing in {path}')
     pq = miou = None
     with open(path) as fh:
         for line in fh:
             m = EPOCH_TEST.search(line)
             if m:
                 pq, miou = 100 * float(m.group(1)), 100 * float(m.group(2))
-    return dict(path=path, density=rows[key], energy=rows['energy'],
+    return dict(path=path, density=rows[key],
+                flat={k: rows[k] for k in FLAT_SCORES},
                 reference=reference(rows, path), pq=pq, miou=miou)
 
 
@@ -181,8 +188,8 @@ def _fmt(m: Metrics) -> str:
     return f'{m[0]:.2f} | {m[1]:.2f} | {m[2]:.2f}'
 
 
-def _mean(runs, key) -> Metrics:
-    return tuple(statistics.mean(r[key][i] for r in runs) for i in range(3))
+def _mean(metrics: Sequence[Metrics]) -> Metrics:
+    return tuple(statistics.mean(m[i] for m in metrics) for i in range(3))
 
 
 def render_set(set_name, table, pe, variants, ref) -> Tuple[str, Dict]:
@@ -197,12 +204,16 @@ def render_set(set_name, table, pe, variants, ref) -> Tuple[str, Dict]:
         'improvement | splits beaten | verdict |',
         '| --- | --- | --- | --- | --- | --- | --- | --- |'
     ]
-    energy_i = improvement(pe['energy'], ref)
-    lines.append(f"| flat Energy (base model) | {_fmt(pe['energy'])} | "
-                 f'{energy_i:.2f} | | {rank(energy_i, table)}/{n} | |')
-    lines.append(f"| best robust split `{best['name']}` "
-                 f"({best['best_score']}) | {_fmt(best['metrics'])} | "
-                 f"{best['value']:.2f} | {best['averaged']:.2f} | | |")
+    for key, title in FLAT_SCORES.items():
+        metrics = pe['flat'][key]
+        flat_i = improvement(metrics, ref)
+        lines.append(f'| flat {title} (base model) | {_fmt(metrics)} | '
+                     f'{flat_i:.2f} | | {rank(flat_i, table)}/{n} | |')
+    for key in GROUP_SCORES:
+        mark = ' (best)' if key == best['best_score'] else ''
+        lines.append(f"| best robust split `{best['name']}`: {key}{mark} | "
+                     f"{_fmt(best['scores'][key])} | {best['values'][key]:.2f} "
+                     f"| {best['averaged']:.2f} | | |")
     verdicts = {}
     for label, runs in variants.items():
         values = [improvement(r['density'], ref) for r in runs]
@@ -212,7 +223,8 @@ def render_set(set_name, table, pe, variants, ref) -> Tuple[str, Dict]:
         verdicts[label] = verdict(values, best['value'])
         lines.append(f'| OCCUQ {label} ({len(runs)} run'
                      f'{"s" if len(runs) > 1 else ""}) | '
-                     f"{_fmt(_mean(runs, 'density'))} | {mean:.2f}{spread} | "
+                     f"{_fmt(_mean([r['density'] for r in runs]))} | "
+                     f'{mean:.2f}{spread} | '
                      f'| {rank(mean, table)}/{n} | {verdicts[label]} |')
     c_runs = variants['C']
     if all(r['pq'] is not None for r in c_runs) and pe['pq'] is not None:
@@ -220,7 +232,8 @@ def render_set(set_name, table, pe, variants, ref) -> Tuple[str, Dict]:
             '', f"C after fine-tuning (mean over runs): PQ "
             f"{statistics.mean(r['pq'] for r in c_runs):.2f}, mIoU "
             f"{statistics.mean(r['miou'] for r in c_runs):.2f}, own flat "
-            f"Energy {_fmt(_mean(c_runs, 'energy'))}; base model PQ "
+            f"Energy {_fmt(_mean([r['flat']['energy'] for r in c_runs]))}; "
+            'base model PQ '
             f"{pe['pq']:.2f}, mIoU {pe['miou']:.2f}."
         ]
     return '\n'.join(lines), verdicts
@@ -251,7 +264,10 @@ def compare(grouping_dir: str, pe_dir: str, a_dirs: Sequence[str],
         '# OCCUQ vs the robust grouping splits', '',
         'Like-for-like single-score improvement I = (AUROC - R_AUROC) + '
         '(AP - R_AP) - (FPR@95 - R_FPR@95); a split counts with its best '
-        'Group score. Verdict against the best robust split: better if '
+        'Group score, marked (best). The averaged improvement is '
+        "robust.tsv's mean I over the split's three Group scores. The flat "
+        "rows are the base model's online scores. Verdict against the best "
+        'robust split: better if '
         'every run is above it, worse if every run is below it, too close '
         'to call otherwise.', '',
         '| variant | ' + ' | '.join(SET_TITLES[s] for s in SETS) + ' |',

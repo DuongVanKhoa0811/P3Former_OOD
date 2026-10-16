@@ -183,8 +183,11 @@ python tools/compare_occuq_grouping.py \
 ## Results
 
 Numbers are AUROC / AP / FPR@95 in %. The verdict table and the three set tables are
-copied from `occuq_vs_grouping.md`. Verdict per variant and set, against the best robust
-split:
+copied from `occuq_vs_grouping.md`. Each set table lists the base model's five flat
+scores, the best robust split's three Group scores and the OCCUQ variants. `(best)` marks
+the Group score the verdict compares against; the averaged improvement is the split's mean
+I over its three Group scores (grouping's `robust.tsv`), so it repeats on all three rows.
+Verdict per variant and set, against the best robust split:
 
 | variant | Cetran | test | test + Cetran |
 | --- | --- | --- | --- |
@@ -198,8 +201,14 @@ R (mean of the base model's flat MSP, Energy and Entropy): 91.89 / 35.77 / 29.99
 
 | method | AUROC | AP | FPR@95 | I (like-for-like) | averaged improvement | splits beaten | verdict |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| flat MSP (base model) | 90.42 | 28.27 | 32.32 | -11.30 | | 0/33 | |
+| flat MaxLogit (base model) | 93.19 | 41.72 | 26.63 | 10.61 | | 6/33 | |
+| flat ODIN (base model) | 94.86 | 44.58 | 23.39 | 18.38 | | 27/33 | |
 | flat Energy (base model) | 93.14 | 40.33 | 26.35 | 9.45 | | 0/33 | |
-| best robust split `s3.4.8.17` (group_msp) | 96.41 | 52.08 | 18.83 | 31.99 | 24.73 | | |
+| flat Entropy (base model) | 92.10 | 38.70 | 31.29 | 1.84 | | 0/33 | |
+| best robust split `s3.4.8.17`: group_msp (best) | 96.41 | 52.08 | 18.83 | 31.99 | 24.73 | | |
+| best robust split `s3.4.8.17`: group_energy | 93.29 | 40.81 | 26.21 | 10.22 | 24.73 | | |
+| best robust split `s3.4.8.17`: group_entropy | 96.41 | 52.08 | 18.83 | 31.99 | 24.73 | | |
 | OCCUQ pe (1 run) | 89.35 | 15.09 | 28.89 | -22.12 | | 0/33 | worse |
 | OCCUQ A (3 runs) | 92.53 | 35.67 | 28.89 | 1.64 [0.16, 2.93] | | 0/33 | worse |
 | OCCUQ C (3 runs) | 93.50 | 37.03 | 25.56 | 7.30 [5.97, 9.19] | | 0/33 | worse |
@@ -212,8 +221,14 @@ R (mean of the base model's flat MSP, Energy and Entropy): 88.82 / 23.15 / 48.03
 
 | method | AUROC | AP | FPR@95 | I (like-for-like) | averaged improvement | splits beaten | verdict |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| flat MSP (base model) | 86.26 | 13.75 | 51.15 | -15.08 | | 0/33 | |
+| flat MaxLogit (base model) | 92.08 | 34.23 | 42.71 | 19.66 | | 0/33 | |
+| flat ODIN (base model) | 86.53 | 19.51 | 69.62 | -27.52 | | 0/33 | |
 | flat Energy (base model) | 92.36 | 35.47 | 42.55 | 21.34 | | 6/33 | |
-| best robust split `s16` (group_entropy) | 94.22 | 39.75 | 29.04 | 41.00 | 34.78 | | |
+| flat Entropy (base model) | 87.84 | 20.23 | 50.40 | -6.27 | | 0/33 | |
+| best robust split `s16`: group_msp | 94.21 | 39.75 | 29.06 | 40.97 | 34.78 | | |
+| best robust split `s16`: group_energy | 92.39 | 36.47 | 42.56 | 22.37 | 34.78 | | |
+| best robust split `s16`: group_entropy (best) | 94.22 | 39.75 | 29.04 | 41.00 | 34.78 | | |
 | OCCUQ pe (1 run) | 82.26 | 6.83 | 62.32 | -37.17 | | 0/33 | worse |
 | OCCUQ A (3 runs) | 86.90 | 12.51 | 51.18 | -15.70 [-17.04, -13.19] | | 0/33 | worse |
 | OCCUQ C (3 runs) | 87.33 | 12.75 | 50.85 | -14.70 [-18.31, -10.15] | | 0/33 | worse |
@@ -226,8 +241,14 @@ R (mean of the base model's flat MSP, Energy and Entropy): 90.01 / 26.57 / 42.87
 
 | method | AUROC | AP | FPR@95 | I (like-for-like) | averaged improvement | splits beaten | verdict |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| flat MSP (base model) | 87.76 | 18.06 | 45.76 | -13.64 | | 0/33 | |
+| flat MaxLogit (base model) | 92.67 | 35.89 | 38.12 | 16.74 | | 3/33 | |
+| flat ODIN (base model) | 89.36 | 27.19 | 55.63 | -12.78 | | 0/33 | |
 | flat Energy (base model) | 92.88 | 35.54 | 37.95 | 16.77 | | 3/33 | |
-| best robust split `s16` (group_entropy) | 94.06 | 40.45 | 28.43 | 32.38 | 27.42 | | |
+| flat Entropy (base model) | 89.38 | 26.11 | 44.91 | -3.12 | | 0/33 | |
+| best robust split `s16`: group_msp | 94.04 | 40.45 | 28.52 | 32.27 | 27.42 | | |
+| best robust split `s16`: group_energy | 92.90 | 36.40 | 37.97 | 17.63 | 27.42 | | |
+| best robust split `s16`: group_entropy (best) | 94.06 | 40.45 | 28.43 | 32.38 | 27.42 | | |
 | OCCUQ pe (1 run) | 84.91 | 9.06 | 53.40 | -33.13 | | 0/33 | worse |
 | OCCUQ A (3 runs) | 88.75 | 17.93 | 45.27 | -12.29 [-13.66, -9.74] | | 0/33 | worse |
 | OCCUQ C (3 runs) | 89.39 | 18.44 | 43.94 | -9.81 [-12.51, -6.13] | | 0/33 | worse |
