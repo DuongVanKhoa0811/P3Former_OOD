@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(python3 test_view_class_frames.py)",
+      "Bash(python3 view_class_frames.py * --no-view)",
+      "Bash(python3 read_bin.py * --no-view)"
+    ],
+    "ask": [
+      "Bash(rm *)",
+      "Bash(git clean *)"
+    ],
+    "deny": [
+      "Edit(/Cetran/**)",
+      "Edit(/class_frames/**)",
+      "Edit(/bb/**)"
+    ]
+  }
+}

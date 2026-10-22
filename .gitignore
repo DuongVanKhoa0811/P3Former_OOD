@@ -1,0 +1,56 @@
+# Large data stays out of git. Code, docs and small configs are tracked.
+
+# Data folders
+# Cetran camera runs: ~4,900 PNGs + 3 ZIPs, ~51 GB
+/Cetran/
+# Frames picked by pick_class_frames.py on the server, ~1.7 GB
+/class_frames/
+# Sample LiDAR scans
+/bb/
+/trash/
+
+# Point clouds, arrays, model weights, archives
+*.bin
+*.ply
+*.pcd
+*.las
+*.laz
+*.npy
+*.npz
+*.h5
+*.hdf5
+*.pkl
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.safetensors
+*.zip
+*.tar
+*.gz
+*.tgz
+*.7z
+*.rar
+
+# Papers (third-party PDFs)
+*.pdf
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+.venv/
+venv/
+.env
+
+# Claude Code: personal files stay on this machine
+CLAUDE.local.md
+.claude/settings.local.json
+
+# macOS and editors
+.DS_Store
+._*
+.vscode/
+.idea/
+*.swp
