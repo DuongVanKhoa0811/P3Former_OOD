@@ -20,6 +20,8 @@ variants. Verdict per variant and set, against the best split:
 - better if every run is above it;
 - worse if every run is below it;
 - too close to call otherwise.
+After the set tables, a section reports each set's best split, with its
+three Group scores, on every set.
 
 Spec: docs/superpowers/specs/2026-10-07-occuq-density-design.md.
 
@@ -184,6 +186,12 @@ def rank(value: float, table: List[Dict]) -> int:
     return sum(value > row['value'] for row in table)
 
 
+def best_split(table: List[Dict]) -> Dict:
+    """The robust split with the highest like-for-like value; the first in
+    robust.tsv's order on a tie."""
+    return max(table, key=lambda row: row['value'])
+
+
 def _fmt(m: Metrics) -> str:
     return f'{m[0]:.2f} | {m[1]:.2f} | {m[2]:.2f}'
 
@@ -194,7 +202,7 @@ def _mean(metrics: Sequence[Metrics]) -> Metrics:
 
 def render_set(set_name, table, pe, variants, ref) -> Tuple[str, Dict]:
     """The markdown section of one set, and its verdict per variant."""
-    best = max(table, key=lambda row: row['value'])
+    best = best_split(table)
     n = len(table)
     lines = [
         f'## {SET_TITLES[set_name]}', '',
@@ -239,18 +247,68 @@ def render_set(set_name, table, pe, variants, ref) -> Tuple[str, Dict]:
     return '\n'.join(lines), verdicts
 
 
+def render_transfer(tables: Dict[str, List[Dict]]) -> str:
+    """The section that reports each set's best robust split on every set,
+    with the rows, averaged improvement and splits beaten of the reported
+    set."""
+    lines = [
+        '## Best robust splits across sets', '',
+        "Each set's best robust split, chosen as in that set's table, with "
+        'its three Group scores on every set; each table starts with the '
+        "reported set's own best split. I, the averaged improvement and "
+        'splits beaten are those of the reported set; a split does not beat '
+        "itself. (best) marks the split's best Group score on the reported "
+        "set, and (chosen), for another set's split, the Group score it was "
+        'chosen with on that set; of tied scores, only the first is marked. '
+        'test + Cetran is the union of test and '
+        'Cetran, so only two cases report a split entirely on frames it was '
+        "not chosen on: Cetran's best split on test, and test's on Cetran. "
+        "On test + Cetran, Cetran's and test's splits are partly in-sample, "
+        "and test + Cetran's split is in-sample on Cetran and on test. Even "
+        'the two held-out cases depend on all three sets, which selected the '
+        'robust splits.'
+    ]
+    for target in SETS:
+        table = tables[target]
+        by_name = {row['name']: row for row in table}
+        lines += [
+            '', f'### Reported on {SET_TITLES[target]}', '',
+            '| method | AUROC | AP | FPR@95 | I (like-for-like) | averaged '
+            'improvement | splits beaten |',
+            '| --- | --- | --- | --- | --- | --- | --- |'
+        ]
+        for source in (target, *(s for s in SETS if s != target)):
+            chosen = best_split(tables[source])
+            split = by_name[chosen['name']]
+            for key in GROUP_SCORES:
+                marks = []
+                if key == split['best_score']:
+                    marks.append('best')
+                if source != target and key == chosen['best_score']:
+                    marks.append('chosen')
+                mark = f" ({', '.join(marks)})" if marks else ''
+                value = split['values'][key]
+                lines.append(
+                    f'| best robust split of {SET_TITLES[source]} '
+                    f"`{split['name']}`: {key}{mark} | "
+                    f"{_fmt(split['scores'][key])} | {value:.2f} | "
+                    f"{split['averaged']:.2f} | "
+                    f'{rank(value, table)}/{len(table)} |')
+    return '\n'.join(lines)
+
+
 def compare(grouping_dir: str, pe_dir: str, a_dirs: Sequence[str],
             c_dirs: Sequence[str]) -> str:
     """The markdown report."""
     robust = read_robust(osp.join(grouping_dir, 'divided_mass', 'robust.tsv'))
-    sections, summary = [], {}
+    sections, summary, tables = [], {}, {}
     for set_name in SETS:
         rows = {}
         for sub in SWEEP_DIRS[set_name]:
             rows = merge_rows(
                 rows, parse_rows(osp.join(grouping_dir, sub,
                                           'bipartitions.log')), set_name)
-        table = grouping_table(robust, rows, set_name)
+        table = tables[set_name] = grouping_table(robust, rows, set_name)
         pe = occuq_run(pe_dir, set_name, 'density_pe')
         variants = {
             'pe': [pe],
@@ -260,6 +318,7 @@ def compare(grouping_dir: str, pe_dir: str, a_dirs: Sequence[str],
         text, summary[set_name] = render_set(set_name, table, pe, variants,
                                              pe['reference'])
         sections.append(text)
+    sections.append(render_transfer(tables))
     head = [
         '# OCCUQ vs the robust grouping splits', '',
         'Like-for-like single-score improvement I = (AUROC - R_AUROC) + '

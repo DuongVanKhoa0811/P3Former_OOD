@@ -182,12 +182,13 @@ python tools/compare_occuq_grouping.py \
 
 ## Results
 
-Numbers are AUROC / AP / FPR@95 in %. The verdict table and the three set tables are
-copied from `occuq_vs_grouping.md`. Each set table lists the base model's five flat
-scores, the best robust split's three Group scores and the OCCUQ variants. `(best)` marks
-the Group score the verdict compares against; the averaged improvement is the split's mean
-I over its three Group scores (grouping's `robust.tsv`), so it repeats on all three rows.
-Verdict per variant and set, against the best robust split:
+Numbers are AUROC / AP / FPR@95 in %. The verdict table, the three set tables and the
+cross-set tables at the end of this section are copied from `occuq_vs_grouping.md`. Each
+set table lists the base model's five flat scores, the best robust split's three Group
+scores and the OCCUQ variants. `(best)` marks the Group score the verdict compares
+against; the averaged improvement is the split's mean I over its three Group scores
+(grouping's `robust.tsv`), so it repeats on all three rows. Verdict per variant and set,
+against the best robust split:
 
 | variant | Cetran | test | test + Cetran |
 | --- | --- | --- | --- |
@@ -289,7 +290,74 @@ without a resume, so seed and resume cannot be told apart.
 
 The report states two caveats that both favour grouping: the robust splits were selected
 on these same sets and their numbers are offline, while OCCUQ's settings were fixed in
-advance and its numbers come from the online metric.
+advance and its numbers come from the online metric. The next subsection measures the
+first.
+
+### Best robust splits across sets
+
+Added on 2026-10-22: the last section of `occuq_vs_grouping.md`, copied below. Each table
+reports, on one set, every set's best robust split (chosen as in that set's table), with
+the reported set's own best split first. I, the averaged improvement and splits beaten are
+those of the reported set; a split does not beat itself. `(best)` marks the split's best
+Group score on the reported set, and `(chosen)`, for another set's split, the Group score
+it was chosen with on its own set; of tied scores, only the first is marked. test + Cetran
+is the union of test and Cetran, so only Cetran's split on test and test's split on Cetran
+are reported entirely on frames they were not chosen on; Cetran's and test's splits are
+partly in-sample on test + Cetran, and test + Cetran's split is in-sample on both. Even
+the two held-out cases depend on all three sets, which selected the 33 robust splits.
+
+#### Reported on Cetran
+
+| method | AUROC | AP | FPR@95 | I (like-for-like) | averaged improvement | splits beaten |
+| --- | --- | --- | --- | --- | --- | --- |
+| best robust split of Cetran `s3.4.8.17`: group_msp (best) | 96.41 | 52.08 | 18.83 | 31.99 | 24.73 | 32/33 |
+| best robust split of Cetran `s3.4.8.17`: group_energy | 93.29 | 40.81 | 26.21 | 10.22 | 24.73 | 5/33 |
+| best robust split of Cetran `s3.4.8.17`: group_entropy | 96.41 | 52.08 | 18.83 | 31.99 | 24.73 | 32/33 |
+| best robust split of test `s16`: group_msp | 92.72 | 43.48 | 32.98 | 5.55 | 7.03 | 0/33 |
+| best robust split of test `s16`: group_energy (best) | 93.16 | 40.83 | 26.36 | 9.96 | 7.03 | 2/33 |
+| best robust split of test `s16`: group_entropy (chosen) | 92.74 | 43.48 | 32.96 | 5.59 | 7.03 | 0/33 |
+| best robust split of test + Cetran `s16`: group_msp | 92.72 | 43.48 | 32.98 | 5.55 | 7.03 | 0/33 |
+| best robust split of test + Cetran `s16`: group_energy (best) | 93.16 | 40.83 | 26.36 | 9.96 | 7.03 | 2/33 |
+| best robust split of test + Cetran `s16`: group_entropy (chosen) | 92.74 | 43.48 | 32.96 | 5.59 | 7.03 | 0/33 |
+
+#### Reported on test
+
+| method | AUROC | AP | FPR@95 | I (like-for-like) | averaged improvement | splits beaten |
+| --- | --- | --- | --- | --- | --- | --- |
+| best robust split of test `s16`: group_msp | 94.21 | 39.75 | 29.06 | 40.97 | 34.78 | 32/33 |
+| best robust split of test `s16`: group_energy | 92.39 | 36.47 | 42.56 | 22.37 | 34.78 | 13/33 |
+| best robust split of test `s16`: group_entropy (best) | 94.22 | 39.75 | 29.04 | 41.00 | 34.78 | 32/33 |
+| best robust split of Cetran `s3.4.8.17`: group_msp (chosen) | 89.97 | 17.77 | 51.11 | -7.30 | 1.98 | 0/33 |
+| best robust split of Cetran `s3.4.8.17`: group_energy (best) | 92.36 | 34.70 | 42.58 | 20.55 | 1.98 | 3/33 |
+| best robust split of Cetran `s3.4.8.17`: group_entropy | 89.97 | 17.77 | 51.12 | -7.31 | 1.98 | 0/33 |
+| best robust split of test + Cetran `s16`: group_msp | 94.21 | 39.75 | 29.06 | 40.97 | 34.78 | 32/33 |
+| best robust split of test + Cetran `s16`: group_energy | 92.39 | 36.47 | 42.56 | 22.37 | 34.78 | 13/33 |
+| best robust split of test + Cetran `s16`: group_entropy (best, chosen) | 94.22 | 39.75 | 29.04 | 41.00 | 34.78 | 32/33 |
+
+#### Reported on test + Cetran
+
+| method | AUROC | AP | FPR@95 | I (like-for-like) | averaged improvement | splits beaten |
+| --- | --- | --- | --- | --- | --- | --- |
+| best robust split of test + Cetran `s16`: group_msp | 94.04 | 40.45 | 28.52 | 32.27 | 27.42 | 32/33 |
+| best robust split of test + Cetran `s16`: group_energy | 92.90 | 36.40 | 37.97 | 17.63 | 27.42 | 9/33 |
+| best robust split of test + Cetran `s16`: group_entropy (best) | 94.06 | 40.45 | 28.43 | 32.38 | 27.42 | 32/33 |
+| best robust split of Cetran `s3.4.8.17`: group_msp (chosen) | 91.92 | 26.79 | 40.16 | 4.85 | 8.73 | 0/33 |
+| best robust split of Cetran `s3.4.8.17`: group_energy (best) | 92.91 | 35.18 | 37.93 | 16.46 | 8.73 | 2/33 |
+| best robust split of Cetran `s3.4.8.17`: group_entropy | 91.92 | 26.79 | 40.13 | 4.88 | 8.73 | 0/33 |
+| best robust split of test `s16`: group_msp | 94.04 | 40.45 | 28.52 | 32.27 | 27.42 | 32/33 |
+| best robust split of test `s16`: group_energy | 92.90 | 36.40 | 37.97 | 17.63 | 27.42 | 9/33 |
+| best robust split of test `s16`: group_entropy (best, chosen) | 94.06 | 40.45 | 28.43 | 32.38 | 27.42 | 32/33 |
+
+**Reading.** A best split chosen on one set does not transfer to the other. With the
+Group score it was chosen with, Cetran's `s3.4.8.17` gives −7.30 on test and test's `s16`
+gives 5.59 on Cetran; each beats none of the 33 splits there, against 41.00 and 31.99 for
+the set's own best split. Even their best score on the other set, group_energy both times
+(20.55 on test, 9.96 on Cetran), stays near the base model's flat Energy (21.34 and 9.45).
+On test + Cetran, Cetran's split gives 4.85 with its chosen score and 16.46 at best,
+against 32.38; test and test + Cetran share `s16`, so between them the choice is
+in-sample. Against the held-out split, one verdict changes: on Cetran, all three C seeds
+(5.97 to 9.19) are above `s16`'s 5.59, so C would be `better` there. pe and A stay below
+it, and on test all three variants stay below Cetran's split (−7.30).
 
 ## Dead-dimension check
 

@@ -338,5 +338,10 @@ points above A. C keeps PQ (mean 35.14 / 47.05 / 46.61 on Cetran / test / test +
 against the base model's 35.35 / 46.50 / 46.20). The three dead `pe_features` dimensions do
 not explain `density_pe`'s weak AP.
 
-Full record (commands, run script and PBS jobs, out-of-memory history, per-set and per-seed
-tables, dead-dimension check): [docs/experiments/2026-10-10-occuq-density.md](docs/experiments/2026-10-10-occuq-density.md)
+Added on 2026-10-22: chosen on one set, the best split does not transfer. With the Group
+score it was chosen with, Cetran's `s3.4.8.17` gives −7.30 on test and test's `s16` gives
+5.59 on Cetran, beating none of the 33 splits there. Against that held-out split, all three
+C seeds (5.97 to 9.19) would beat grouping on Cetran; every other verdict stays `worse`.
+
+Full record (commands, run script and PBS jobs, out-of-memory history, per-set, per-seed and
+cross-set tables, dead-dimension check): [docs/experiments/2026-10-10-occuq-density.md](docs/experiments/2026-10-10-occuq-density.md)

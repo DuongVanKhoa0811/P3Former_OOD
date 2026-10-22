@@ -33,7 +33,7 @@ The detailed instructions are split by topic into `.claude/rules/`. Rules withou
 | `architecture/model.md` | segmentor and P3Former head internals (scoped: `p3former/`) |
 | `architecture/ood-pipeline.md` | how OOD scores flow from the head to the metric |
 
-## Progress log (updated 2026-10-10)
+## Progress log (updated 2026-10-22)
 
 Numbers are AUROC / AP / FPR@95 in %. The dates in brackets are the `DOCs.md` entries with the commands and full tables.
 
@@ -48,7 +48,7 @@ Numbers are AUROC / AP / FPR@95 in %. The dates in brackets are the `DOCs.md` en
 | Component | Status |
 | --- | --- |
 | Trained models | `work_dirs/p3former_2xb1_3x_{dso,semantickitti}/epoch_36.pth`. DSO test PQ 46.50, mIoU 48.66. SemanticKITTI val PQ 60.32, against 62.63 for the official checkpoint. |
-| Online OOD scoring and metric | Complete; the flat branch's 39 tests pass (the suite has 84 on this branch). Energy is the best flat score on DSO test + Cetran, 92.88 / 35.55 / 37.94. On SemanticKITTI val with the 2xb1 checkpoint, ODIN is best, 91.46 / 26.94 / 38.33. |
+| Online OOD scoring and metric | Complete; the flat branch's 39 tests pass (the suite has 86 on this branch). Energy is the best flat score on DSO test + Cetran, 92.88 / 35.55 / 37.94. On SemanticKITTI val with the 2xb1 checkpoint, ODIN is best, 91.46 / 26.94 / 38.33. |
 
 ### OCCUQ (done 2026-10-10)
 
@@ -61,7 +61,8 @@ Numbers are AUROC / AP / FPR@95 in %. The dates in brackets are the `DOCs.md` en
   | A | worse | worse | worse |
   | C | worse | worse | worse |
 
-- **Log.** The `DOCs.md` entry of 2026-10-10 summarizes the result. Its full record (commands, per-set tables, C's per-seed PQ / mIoU, the dead-dimension check) is `docs/experiments/2026-10-10-occuq-density.md`.
+- **Transfer** (added 2026-10-22): chosen on one set, the best split does not transfer. With the Group score it was chosen with, Cetran's best split gives −7.30 on test and test's gives 5.59 on Cetran, beating none of the 33 splits there. Against that held-out split, C would be `better` on Cetran; every other verdict stays `worse`.
+- **Log.** The `DOCs.md` entry of 2026-10-10 summarizes the result. Its full record (commands, per-set and cross-set tables, C's per-seed PQ / mIoU, the dead-dimension check) is `docs/experiments/2026-10-10-occuq-density.md`.
 
 ### Key decisions and how they were handled
 
